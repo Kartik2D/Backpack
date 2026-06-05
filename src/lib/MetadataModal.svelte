@@ -1,5 +1,4 @@
 <script>
-  import { Dialog } from "bits-ui";
   import { invoke } from "@tauri-apps/api/core";
   import { toasts } from "$lib/toast.svelte.ts";
 
@@ -65,6 +64,21 @@
     }
   }
 
+  /** @param {KeyboardEvent} event */
+  function onKeydown(event) {
+    if (event.key === "Escape") onClose();
+  }
+
+  $effect(() => {
+    if (!open) {
+      lastGamePath = "";
+      return;
+    }
+
+    window.addEventListener("keydown", onKeydown);
+    return () => window.removeEventListener("keydown", onKeydown);
+  });
+
   $effect(() => {
     if (!open || !game || game.path === lastGamePath) return;
     lastGamePath = game.path;
@@ -74,18 +88,24 @@
   });
 </script>
 
-<Dialog.Root open={open} onOpenChange={(value) => !value && onClose()}>
-  <Dialog.Portal>
-    <Dialog.Overlay class="metadata-overlay" />
-    <Dialog.Content class="metadata-content">
+{#if open}
+  <div class="metadata-root" role="presentation">
+    <button class="overlay" type="button" aria-label="Close" onclick={onClose}></button>
+    <div
+      class="content"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="metadata-title"
+      aria-describedby="metadata-description"
+    >
       <div class="header">
         <div>
-          <Dialog.Title class="metadata-title">Find metadata</Dialog.Title>
-          <Dialog.Description class="metadata-description">
+          <h2 id="metadata-title" class="title">Find metadata</h2>
+          <p id="metadata-description" class="description">
             Search IGDB and choose the correct game title.
-          </Dialog.Description>
+          </p>
         </div>
-        <Dialog.Close class="metadata-close" aria-label="Close">×</Dialog.Close>
+        <button class="close" type="button" aria-label="Close" onclick={onClose}>×</button>
       </div>
 
       <form
@@ -122,36 +142,38 @@
           {/each}
         {/if}
       </div>
-    </Dialog.Content>
-  </Dialog.Portal>
-</Dialog.Root>
+    </div>
+  </div>
+{/if}
 
 <style>
-  :global(.metadata-overlay) {
+  .metadata-root {
     position: fixed;
     inset: 0;
     z-index: 1000;
-    background: rgba(0, 0, 0, 0.62);
   }
 
-  :global(.metadata-content) {
-    box-sizing: border-box;
-    position: fixed;
-    z-index: 1001;
+  .overlay {
+    position: absolute;
     inset: 0;
-    min-width: 100vw;
-    min-height: 100vh;
-    width: 100vw;
-    height: 100dvh;
+    border: 0;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.62);
+    cursor: default;
+  }
+
+  .content {
+    box-sizing: border-box;
+    position: absolute;
+    inset: 0;
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
     gap: 16px;
     padding: 24px clamp(24px, 8vw, 120px);
-    border: 0;
-    border-radius: 0;
     background: #181818;
     color: #eee;
     overflow: hidden;
+    pointer-events: auto;
   }
 
   .header {
@@ -170,18 +192,18 @@
     margin: 0 auto;
   }
 
-  :global(.metadata-title) {
+  .title {
     margin: 0;
     font-size: 18px;
   }
 
-  :global(.metadata-description) {
+  .description {
     margin: 4px 0 0;
     color: #999;
     font-size: 13px;
   }
 
-  :global(.metadata-close) {
+  .close {
     width: 30px;
     height: 30px;
     border: 1px solid #303030;
@@ -248,7 +270,7 @@
 
   .result {
     display: grid;
-    grid-template-columns: 64px 1fr;
+    grid-template-columns: 90px 1fr;
     gap: 12px;
     padding: 9px;
     text-align: left;
@@ -262,8 +284,8 @@
 
   .result img,
   .fallback {
-    width: 64px;
-    height: 86px;
+    width: 90px;
+    aspect-ratio: 3 / 4;
     border-radius: 7px;
     object-fit: cover;
     background: #111;

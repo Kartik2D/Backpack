@@ -13,12 +13,15 @@
   /** @typedef {{ path: string, state: "launching" | "playing" | "stopped", session_secs?: number | null }} GameStateEvent */
 
   const GAP = 10;
+  // IGDB t_cover_small is 90 x 120 px (3:4 portrait).
+  const IGDB_COVER_HEIGHT_RATIO = 120 / 90;
   /** @type {GameApp[]} */
   let apps = $state([]);
   /** @type {HTMLElement | undefined} */
   let box = $state();
   let cols = $state(1);
-  let size = $state(0);
+  let cardWidth = $state(0);
+  let cardHeight = $state(0);
   let scanning = $state(false);
   let fetchingMetadata = $state(false);
   let metadataOpen = $state(false);
@@ -157,7 +160,10 @@
   /** @param {GameApp} app */
   function openMetadata(app) {
     metadataGame = app;
-    metadataOpen = true;
+    // Wait for the context menu portal to close before opening the fullscreen modal.
+    requestAnimationFrame(() => {
+      metadataOpen = true;
+    });
   }
 
   /** @param {GameApp[]} updatedApps */
@@ -174,22 +180,27 @@
     );
   }
 
-  // Pick the column count that yields the largest possible square for N items.
+  // Pick the column count that yields the largest IGDB cover cards for N items.
   function layout() {
     const n = apps.length;
     if (!box || !n) return;
     const w = box.clientWidth - 2 * GAP;
     const h = box.clientHeight - 2 * GAP;
-    let best = 0;
+    let bestWidth = 0;
+    let bestCols = 1;
     for (let c = 1; c <= n; c++) {
       const r = Math.ceil(n / c);
-      const s = Math.min((w - (c - 1) * GAP) / c, (h - (r - 1) * GAP) / r);
-      if (s > best) {
-        best = s;
-        cols = c;
+      const maxWidth = (w - (c - 1) * GAP) / c;
+      const maxHeight = (h - (r - 1) * GAP) / r;
+      const width = Math.min(maxWidth, maxHeight / IGDB_COVER_HEIGHT_RATIO);
+      if (width > bestWidth) {
+        bestWidth = width;
+        bestCols = c;
       }
     }
-    size = Math.floor(best);
+    cols = bestCols;
+    cardWidth = Math.floor(bestWidth);
+    cardHeight = Math.floor(bestWidth * IGDB_COVER_HEIGHT_RATIO);
   }
 
   $effect(() => {
@@ -233,7 +244,7 @@
   <div
     class="grid"
     bind:this={box}
-    style="--cols:{cols}; --size:{size}px; --gap:{GAP}px"
+    style="--cols:{cols}; --card-width:{cardWidth}px; --card-height:{cardHeight}px; --gap:{GAP}px"
   >
     {#each apps as app (app.path)}
       <ContextMenu.Root>
@@ -311,20 +322,21 @@
     display: grid;
     place-content: center;
     gap: var(--gap);
-    grid-template-columns: repeat(var(--cols), var(--size));
-    grid-auto-rows: var(--size);
+    grid-template-columns: repeat(var(--cols), var(--card-width));
+    grid-auto-rows: var(--card-height);
   }
 
   .card-wrap {
-    width: var(--size);
-    height: var(--size);
+    width: var(--card-width);
+    height: var(--card-height);
     display: block;
   }
 
   .card {
     position: relative;
-    width: var(--size);
-    height: var(--size);
+    width: var(--card-width);
+    height: var(--card-height);
+    aspect-ratio: 3 / 4;
     overflow: hidden;
     padding: 0;
     border-radius: 14px;

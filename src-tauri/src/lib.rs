@@ -62,6 +62,12 @@ struct InstallIndex {
     ubisoft_ids: HashSet<String>,
 }
 
+#[cfg(target_os = "macos")]
+struct InstallIndex {
+    steam_appids: HashSet<String>,
+    epic_paths: HashSet<String>,
+}
+
 #[cfg(target_os = "windows")]
 fn build_install_index() -> InstallIndex {
     let mut steam_appids = HashSet::new();
@@ -110,6 +116,46 @@ fn build_install_index() -> InstallIndex {
         epic_paths,
         aumids,
         ubisoft_ids,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn build_install_index() -> InstallIndex {
+    let mut steam_appids = HashSet::new();
+    if let Some(steam) = steam_path() {
+        let library_file = steam.join("steamapps").join("libraryfolders.vdf");
+        if let Ok(content) = std::fs::read_to_string(&library_file) {
+            let mut libraries = vec![steam];
+            libraries.extend(vdf_values(&content, "path").into_iter().map(PathBuf::from));
+            for library in libraries {
+                let steamapps = library.join("steamapps");
+                let Ok(entries) = std::fs::read_dir(&steamapps) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else {
+                        continue;
+                    };
+                    if let Some(appid) = name
+                        .strip_prefix("appmanifest_")
+                        .and_then(|s| s.strip_suffix(".acf"))
+                    {
+                        steam_appids.insert(appid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let epic_paths = scan_epic()
+        .into_iter()
+        .map(|d| normalize_path_key(&d.app.path))
+        .collect();
+
+    InstallIndex {
+        steam_appids,
+        epic_paths,
     }
 }
 
@@ -191,7 +237,36 @@ fn prune_missing(apps: Vec<App>) -> Vec<App> {
         .collect()
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn app_still_exists(path: &str, index: &InstallIndex) -> bool {
+    let lower = path.to_lowercase();
+
+    if let Some(appid) = lower.strip_prefix("steam://rungameid/") {
+        let appid = appid.trim_end_matches('/');
+        return index.steam_appids.contains(appid);
+    }
+
+    if lower.starts_with("com.epicgames.launcher://") {
+        return index.epic_paths.contains(&normalize_path_key(path));
+    }
+
+    // Unknown custom protocols are kept to avoid false removals.
+    if lower.contains("://") {
+        return true;
+    }
+
+    Path::new(path).exists()
+}
+
+#[cfg(target_os = "macos")]
+fn prune_missing(apps: Vec<App>) -> Vec<App> {
+    let index = build_install_index();
+    apps.into_iter()
+        .filter(|a| app_still_exists(&a.path, &index))
+        .collect()
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn prune_missing(apps: Vec<App>) -> Vec<App> {
     apps.into_iter()
         .filter(|a| Path::new(&a.path).exists())
@@ -309,8 +384,7 @@ impl IgdbClient {
             "search \"{}\"; fields name,summary,cover.image_id; limit 12;",
             escape_igdb_string(&search)
         );
-        self
-            .http
+        self.http
             .post("https://api.igdb.com/v4/games")
             .header("Client-ID", &self.client_id)
             .header("Authorization", format!("Bearer {}", self.access_token))
@@ -492,6 +566,11 @@ fn launch_detached(path: &str) {
         .spawn();
 }
 
+#[cfg(target_os = "macos")]
+fn launch_detached(path: &str) {
+    let _ = Command::new("open").arg(path).spawn();
+}
+
 // Resolve a .lnk shortcut's TargetPath. Returns Some("") for Store/UWP
 // shortcuts, which point at an AppUserModelID via a shell ID list and have no
 // file target.
@@ -529,7 +608,8 @@ fn is_trackable(path: &str) -> bool {
     // Packaged apps (WindowsApps / AppsFolder AUMIDs) and protocol launches
     // (e.g. steam://rungameid/...) hand off to another process and exit, so we
     // can't wait on them.
-    if lower.contains("windowsapps") || lower.contains("shell:appsfolder") || lower.contains("://") {
+    if lower.contains("windowsapps") || lower.contains("shell:appsfolder") || lower.contains("://")
+    {
         return false;
     }
     if lower.ends_with(".lnk") {
@@ -549,8 +629,13 @@ fn is_trackable(path: &str) -> bool {
     true
 }
 
+#[cfg(target_os = "macos")]
+fn is_trackable(path: &str) -> bool {
+    !path.to_lowercase().contains("://")
+}
+
 // Extract single-line `"key" "value"` entries from a Valve VDF/ACF file.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn vdf_values(content: &str, key: &str) -> Vec<String> {
     let needle = format!("\"{key}\"");
     let mut out = Vec::new();
@@ -586,7 +671,21 @@ fn steam_path() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(target_os = "macos")]
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(PathBuf::from)
+}
+
+#[cfg(target_os = "macos")]
+fn steam_path() -> Option<PathBuf> {
+    home_dir().map(|home| {
+        home.join("Library")
+            .join("Application Support")
+            .join("Steam")
+    })
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn scan_steam() -> Vec<App> {
     let Some(steam) = steam_path() else {
         return Vec::new();
@@ -719,7 +818,7 @@ if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -Compress -InputObject @($o
 }
 
 // A discovered game before the IGDB metadata pass.
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 struct Discovered {
     app: App,
 }
@@ -798,7 +897,7 @@ fn find_game_exe(dir: &Path) -> Option<PathBuf> {
         .map(|(p, _)| p)
 }
 
-#[cfg(target_os = "windows")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn folder_name(dir: &str) -> String {
     Path::new(dir)
         .file_name()
@@ -810,13 +909,27 @@ fn folder_name(dir: &str) -> String {
 // Epic Games: JSON manifests under ProgramData. Launch via the
 // com.epicgames.launcher:// protocol.
 #[cfg(target_os = "windows")]
-fn scan_epic() -> Vec<Discovered> {
+fn epic_manifest_dir() -> PathBuf {
     let program_data = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into());
-    let dir = Path::new(&program_data)
+    Path::new(&program_data)
         .join("Epic")
         .join("EpicGamesLauncher")
         .join("Data")
-        .join("Manifests");
+        .join("Manifests")
+}
+
+#[cfg(target_os = "macos")]
+fn epic_manifest_dir() -> PathBuf {
+    PathBuf::from("/Users/Shared")
+        .join("Epic Games")
+        .join("Launcher")
+        .join("Data")
+        .join("Manifests")
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn scan_epic() -> Vec<Discovered> {
+    let dir = epic_manifest_dir();
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return Vec::new();
     };
@@ -872,6 +985,82 @@ fn scan_epic() -> Vec<Discovered> {
         });
     }
     out
+}
+
+#[cfg(target_os = "macos")]
+fn plist_raw_value(info_plist: &Path, key: &str) -> Option<String> {
+    let output = Command::new("plutil")
+        .args(["-extract", key, "raw", "-o", "-"])
+        .arg(info_plist)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!value.is_empty()).then_some(value)
+}
+
+#[cfg(target_os = "macos")]
+fn app_bundle_name(path: &Path) -> String {
+    let info = path.join("Contents").join("Info.plist");
+    plist_raw_value(&info, "CFBundleDisplayName")
+        .or_else(|| plist_raw_value(&info, "CFBundleName"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string()
+        })
+}
+
+#[cfg(target_os = "macos")]
+fn is_game_app_bundle(path: &Path) -> bool {
+    let info = path.join("Contents").join("Info.plist");
+    plist_raw_value(&info, "LSApplicationCategoryType").as_deref()
+        == Some("public.app-category.games")
+}
+
+#[cfg(target_os = "macos")]
+fn collect_app_bundles(dir: &Path, depth: u32, budget: &mut u32, out: &mut Vec<PathBuf>) {
+    if depth == 0 || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let path = entry.path();
+        let is_app = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("app"))
+            .unwrap_or(false);
+        if is_app {
+            out.push(path);
+            continue;
+        }
+        if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+            collect_app_bundles(&path, depth - 1, budget, out);
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn app_to_discovered(path: PathBuf) -> Discovered {
+    let name = app_bundle_name(&path);
+    Discovered {
+        app: App {
+            path: path.to_string_lossy().into_owned(),
+            name,
+            image: String::new(),
+            description: String::new(),
+        },
+    }
 }
 
 // Read registry-based launchers (GOG, Ubisoft, EA, Battle.net) in one shot.
@@ -1006,7 +1195,9 @@ fn scan_ea(reg: &serde_json::Value) -> Vec<Discovered> {
         .into_iter()
         .filter_map(|item| {
             let dir = item.get("dir")?.as_str()?.to_string();
-            let exe = find_game_exe(Path::new(&dir))?.to_string_lossy().into_owned();
+            let exe = find_game_exe(Path::new(&dir))?
+                .to_string_lossy()
+                .into_owned();
             let name = item
                 .get("name")
                 .and_then(|v| v.as_str())
@@ -1032,8 +1223,14 @@ fn scan_blizzard(reg: &serde_json::Value) -> Vec<Discovered> {
         .into_iter()
         .filter_map(|item| {
             let dir = item.get("dir")?.as_str()?.to_string();
-            let exe = find_game_exe(Path::new(&dir))?.to_string_lossy().into_owned();
-            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let exe = find_game_exe(Path::new(&dir))?
+                .to_string_lossy()
+                .into_owned();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             Some(Discovered {
                 app: App {
                     path: exe.clone(),
@@ -1074,6 +1271,57 @@ fn scan_itch() -> Vec<Discovered> {
                 description: String::new(),
             },
         });
+    }
+    out
+}
+
+// itch.io: macOS installs live under ~/Library/Application Support/itch/apps.
+#[cfg(target_os = "macos")]
+fn scan_itch() -> Vec<Discovered> {
+    let Some(home) = home_dir() else {
+        return Vec::new();
+    };
+    let dir = home
+        .join("Library")
+        .join("Application Support")
+        .join("itch")
+        .join("apps");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let folder = entry.path();
+        if !folder.is_dir() {
+            continue;
+        }
+        let mut bundles = Vec::new();
+        let mut budget = 800u32;
+        collect_app_bundles(&folder, 4, &mut budget, &mut bundles);
+        out.extend(bundles.into_iter().map(app_to_discovered));
+    }
+    out
+}
+
+#[cfg(target_os = "macos")]
+fn scan_macos_applications() -> Vec<Discovered> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home_dir() {
+        roots.push(home.join("Applications"));
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        let mut bundles = Vec::new();
+        let mut budget = 1200u32;
+        collect_app_bundles(&root, 2, &mut budget, &mut bundles);
+        out.extend(
+            bundles
+                .into_iter()
+                .filter(|path| is_game_app_bundle(path))
+                .map(app_to_discovered),
+        );
     }
     out
 }
@@ -1138,7 +1386,18 @@ fn discover_games() -> Vec<App> {
     dedupe_apps(pending.into_iter().map(|d| d.app).collect())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+fn discover_games() -> Vec<App> {
+    let mut pending: Vec<Discovered> = Vec::new();
+    pending.extend(scan_steam().into_iter().map(|app| Discovered { app }));
+    pending.extend(scan_epic());
+    pending.extend(scan_itch());
+    pending.extend(scan_macos_applications());
+
+    dedupe_apps(pending.into_iter().map(|d| d.app).collect())
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn discover_games() -> Vec<App> {
     Vec::new()
 }
@@ -1265,7 +1524,10 @@ fn apply_metadata(
 fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
     let state = app.state::<AppList>();
     let existing = state.0.lock().unwrap().clone();
-    let mut seen: HashSet<String> = existing.iter().map(|a| normalize_path_key(&a.path)).collect();
+    let mut seen: HashSet<String> = existing
+        .iter()
+        .map(|a| normalize_path_key(&a.path))
+        .collect();
     let mut additions = Vec::new();
 
     for path in paths {
@@ -1295,10 +1557,9 @@ fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
 #[tauri::command]
 fn launch(path: String, window: tauri::WebviewWindow, app: tauri::AppHandle) {
     std::thread::spawn(move || {
-        // On Windows, UWP/Store/Game Pass apps can't have their lifetime
-        // tracked. Launch them but leave the window open, since we'd never
-        // receive a reliable "app exited" signal to reopen it.
-        #[cfg(target_os = "windows")]
+        // Protocol and packaged launches hand off to a launcher process, so we
+        // can't wait for the game itself to exit.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
         if !is_trackable(&path) {
             launch_detached(&path);
             return;

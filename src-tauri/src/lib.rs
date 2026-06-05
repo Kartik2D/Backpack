@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -43,7 +44,7 @@ fn save_apps(app: &tauri::AppHandle, list: &[App]) {
 }
 
 // Extract the app's own icon as a base64 PNG data URI so it can be stored and
-// rendered offline. macOS only for now; other platforms get no icon.
+// rendered offline.
 #[cfg(target_os = "macos")]
 fn app_icon(path: &str) -> Option<String> {
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -88,9 +89,53 @@ fn app_icon(path: &str) -> Option<String> {
     Some(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+fn app_icon(path: &str) -> Option<String> {
+    // The path is passed via an env var (not $args): with `-Command`, trailing
+    // arguments are appended to the command string rather than exposed as $args.
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:BACKPACK_ICON_PATH)
+if ($null -eq $icon) { exit 1 }
+$bitmap = $icon.ToBitmap()
+$stream = [System.IO.MemoryStream]::new()
+$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
+[Convert]::ToBase64String($stream.ToArray())
+$stream.Dispose()
+$bitmap.Dispose()
+$icon.Dispose()
+"#;
+
+    let output = windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("BACKPACK_ICON_PATH", path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+
+    let encoded = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!encoded.is_empty()).then(|| format!("data:image/png;base64,{encoded}"))
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn app_icon(_path: &str) -> Option<String> {
     None
+}
+
+#[cfg(target_os = "windows")]
+fn windows_command(program: &str) -> Command {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut command = Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
 }
 
 fn file_stem(path: &str) -> String {
@@ -127,12 +172,911 @@ fn wait_for_app(path: &str) {
     let _ = Command::new("open").arg("-W").arg(path).status();
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
 fn wait_for_app(path: &str) {
-    // On Windows/Linux the dropped path is the executable itself.
+    // The path is passed via an env var (not $args): with `-Command`, trailing
+    // arguments are appended to the command string rather than exposed as $args.
+    // Start-Process resolves both .exe and .lnk shortcuts; -Wait blocks until exit.
+    let _ = windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Process -FilePath $env:BACKPACK_LAUNCH_PATH -Wait",
+        ])
+        .env("BACKPACK_LAUNCH_PATH", path)
+        .status();
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn wait_for_app(path: &str) {
+    // On Linux the dropped path is expected to be the executable itself.
     if let Ok(mut child) = Command::new(path).spawn() {
         let _ = child.wait();
     }
+}
+
+// Fire-and-forget launch used when we can't track the app's lifetime.
+#[cfg(target_os = "windows")]
+fn launch_detached(path: &str) {
+    // Packaged apps (shell:AppsFolder\<AUMID>) activate most reliably through
+    // explorer.exe; protocols and regular files go through Start-Process.
+    if path.to_lowercase().starts_with("shell:") {
+        let _ = windows_command("explorer.exe").arg(path).spawn();
+        return;
+    }
+    let _ = windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Start-Process -FilePath $env:BACKPACK_LAUNCH_PATH",
+        ])
+        .env("BACKPACK_LAUNCH_PATH", path)
+        .spawn();
+}
+
+// Resolve a .lnk shortcut's TargetPath. Returns Some("") for Store/UWP
+// shortcuts, which point at an AppUserModelID via a shell ID list and have no
+// file target.
+#[cfg(target_os = "windows")]
+fn resolve_lnk_target(path: &str) -> Option<String> {
+    let script = r#"
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($env:BACKPACK_LNK_PATH)
+$shortcut.TargetPath
+"#;
+
+    let output = windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("BACKPACK_LNK_PATH", path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+// Whether we can reliably wait for the app to exit. UWP/Store/Game Pass apps
+// run inside a container; their launcher returns immediately, so `-Wait` is
+// meaningless and the window would reappear instantly. In that case we'd rather
+// leave the window open than close it and never get a reopen signal.
+#[cfg(target_os = "windows")]
+fn is_trackable(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    // Packaged apps (WindowsApps / AppsFolder AUMIDs) and protocol launches
+    // (e.g. steam://rungameid/...) hand off to another process and exit, so we
+    // can't wait on them.
+    if lower.contains("windowsapps") || lower.contains("shell:appsfolder") || lower.contains("://") {
+        return false;
+    }
+    if lower.ends_with(".lnk") {
+        match resolve_lnk_target(path) {
+            // Empty target => Store/UWP shortcut (AUMID, no file). Target under
+            // WindowsApps => packaged app. Neither is waitable.
+            Some(target) => {
+                let t = target.to_lowercase();
+                if target.is_empty() || t.contains("windowsapps") {
+                    return false;
+                }
+            }
+            // Couldn't resolve: assume not trackable so we don't close the window.
+            None => return false,
+        }
+    }
+    true
+}
+
+// Read an image file and return it as a base64 data URI.
+#[cfg(target_os = "windows")]
+fn encode_image(path: &Path) -> Option<String> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+
+    let bytes = std::fs::read(path).ok()?;
+    let mime = match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_lowercase)
+        .as_deref()
+    {
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        _ => "image/png",
+    };
+    Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+// Extract single-line `"key" "value"` entries from a Valve VDF/ACF file.
+#[cfg(target_os = "windows")]
+fn vdf_values(content: &str, key: &str) -> Vec<String> {
+    let needle = format!("\"{key}\"");
+    let mut out = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix(&needle) else {
+            continue;
+        };
+        // The remainder looks like:  \t\t"value"
+        if let Some(start) = rest.find('"') {
+            if let Some(end) = rest[start + 1..].find('"') {
+                // VDF escapes backslashes as \\.
+                out.push(rest[start + 1..start + 1 + end].replace("\\\\", "\\"));
+            }
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "windows")]
+fn steam_path() -> Option<PathBuf> {
+    let output = windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "(Get-ItemProperty 'HKCU:\\Software\\Valve\\Steam' -ErrorAction SilentlyContinue).SteamPath",
+        ])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+#[cfg(target_os = "windows")]
+fn steam_icon(steam: &Path, appid: &str) -> Option<String> {
+    let cache = steam.join("appcache").join("librarycache");
+    // Older Steam layout: flat files keyed by appid.
+    for name in [
+        format!("{appid}_icon.jpg"),
+        format!("{appid}_library_600x900.jpg"),
+        format!("{appid}_header.jpg"),
+    ] {
+        let p = cache.join(&name);
+        if p.exists() {
+            return encode_image(&p);
+        }
+    }
+    // Newer Steam layout: a per-appid folder of hashed images.
+    let folder = cache.join(appid);
+    let mut best: Option<PathBuf> = None;
+    if let Ok(entries) = std::fs::read_dir(&folder) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_image = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| matches!(e.to_lowercase().as_str(), "jpg" | "jpeg" | "png"))
+                .unwrap_or(false);
+            if !is_image {
+                continue;
+            }
+            let larger = match &best {
+                Some(b) => entry.metadata().map(|m| m.len()).unwrap_or(0)
+                    > std::fs::metadata(b).map(|m| m.len()).unwrap_or(0),
+                None => true,
+            };
+            if larger {
+                best = Some(p);
+            }
+        }
+    }
+    best.as_deref().and_then(encode_image)
+}
+
+#[cfg(target_os = "windows")]
+fn scan_steam() -> Vec<App> {
+    let Some(steam) = steam_path() else {
+        return Vec::new();
+    };
+
+    let library_file = steam.join("steamapps").join("libraryfolders.vdf");
+    let Ok(content) = std::fs::read_to_string(&library_file) else {
+        return Vec::new();
+    };
+
+    // Always include the base install; libraryfolders.vdf covers extra drives.
+    let mut libraries = vec![steam.clone()];
+    libraries.extend(vdf_values(&content, "path").into_iter().map(PathBuf::from));
+
+    let mut games = Vec::new();
+    let mut seen = HashSet::new();
+    for library in libraries {
+        let steamapps = library.join("steamapps");
+        let Ok(entries) = std::fs::read_dir(&steamapps) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_manifest = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("appmanifest_") && n.ends_with(".acf"))
+                .unwrap_or(false);
+            if !is_manifest {
+                continue;
+            }
+            let Ok(acf) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Some(appid) = vdf_values(&acf, "appid").into_iter().next() else {
+                continue;
+            };
+            // Skip Steamworks redistributables and other non-game tools.
+            if appid == "228980" || !seen.insert(appid.clone()) {
+                continue;
+            }
+            let name = vdf_values(&acf, "name")
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| format!("Steam app {appid}"));
+            games.push(App {
+                path: format!("steam://rungameid/{appid}"),
+                name,
+                image: steam_icon(&steam, &appid).unwrap_or_default(),
+                description: "Steam".into(),
+            });
+        }
+    }
+    games
+}
+
+#[cfg(target_os = "windows")]
+fn scan_gamepass() -> Vec<App> {
+    // Enumerate installed Store packages, keep only those that are Xbox games
+    // (identified by a MicrosoftGame.config in their real install dir), and emit
+    // their launch AUMID plus a best-effort tile logo path.
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$starts = @{}
+Get-StartApps | ForEach-Object { $starts[$_.AppID] = $_.Name }
+$out = @()
+foreach ($p in Get-AppxPackage) {
+    if ($p.IsFramework -or $p.NonRemovable -or $p.SignatureKind -ne 'Store') { continue }
+    $loc = $p.InstallLocation
+    if (-not $loc) { continue }
+    $item = Get-Item $loc
+    $real = if ($item.LinkType -eq 'Junction') { @($item.Target)[0] } else { $loc }
+    if (-not (Test-Path (Join-Path $real 'MicrosoftGame.config'))) { continue }
+    $appId = @((Get-AppxPackageManifest $p).Package.Applications.Application)[0].Id
+    if (-not $appId) { continue }
+    $aumid = $p.PackageFamilyName + '!' + $appId
+    $name = $starts[$aumid]
+    if (-not $name) { $name = $p.Name }
+    $logo = $null
+    $assets = Join-Path $loc 'Assets'
+    $cand = $null
+    if (Test-Path $assets) {
+        $cand = Get-ChildItem -Path $assets -Recurse -File -Filter '*Square150x150Logo*' |
+            Where-Object { $_.Extension -in '.png', '.jpg' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+    }
+    if (-not $cand) {
+        $cand = Get-ChildItem -Path $loc -File -Filter '*Square150x150Logo*' |
+            Where-Object { $_.Extension -in '.png', '.jpg' } |
+            Sort-Object Length -Descending | Select-Object -First 1
+    }
+    if ($cand) { $logo = $cand.FullName }
+    $out += [pscustomobject]@{ name = $name; path = ('shell:AppsFolder\' + $aumid); logo = $logo }
+}
+if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -Compress -InputObject @($out) }
+"#;
+
+    let output = match windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    // A single result may deserialize as an object rather than an array.
+    let items = match value {
+        serde_json::Value::Array(a) => a,
+        other @ serde_json::Value::Object(_) => vec![other],
+        _ => Vec::new(),
+    };
+
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let path = item.get("path")?.as_str()?.to_string();
+            if path.is_empty() {
+                return None;
+            }
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let image = item
+                .get("logo")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .and_then(|s| encode_image(Path::new(s)))
+                .unwrap_or_default();
+            Some(App {
+                path,
+                name,
+                image,
+                description: "Xbox".into(),
+            })
+        })
+        .collect()
+}
+
+// A discovered game plus an optional executable to extract an icon from later
+// (batched), used when the tile image isn't already a cheap on-disk asset.
+#[cfg(target_os = "windows")]
+struct Discovered {
+    app: App,
+    icon_source: Option<String>,
+}
+
+// Batch-extract icons for a set of executables in a single PowerShell call.
+// Returns a map of exe path -> base64 PNG data URI. Doing this once (instead of
+// once per game) keeps a full multi-launcher scan fast.
+#[cfg(target_os = "windows")]
+fn extract_exe_icons(paths: &[String]) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    if paths.is_empty() {
+        return map;
+    }
+
+    let script = r#"
+Add-Type -AssemblyName System.Drawing
+$paths = $env:BACKPACK_ICON_PATHS -split '\|'
+$out = @()
+foreach ($p in $paths) {
+    try {
+        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($p)
+        if ($null -eq $icon) { $out += ''; continue }
+        $bmp = $icon.ToBitmap()
+        $ms = New-Object System.IO.MemoryStream
+        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+        $out += [Convert]::ToBase64String($ms.ToArray())
+        $ms.Dispose(); $bmp.Dispose(); $icon.Dispose()
+    } catch { $out += '' }
+}
+ConvertTo-Json -Compress -InputObject @($out)
+"#;
+
+    let output = match windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("BACKPACK_ICON_PATHS", paths.join("|"))
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return map,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(_) => return map,
+    };
+    // One path yields a bare JSON string instead of an array.
+    let items = match value {
+        serde_json::Value::Array(a) => a,
+        other @ serde_json::Value::String(_) => vec![other],
+        _ => return map,
+    };
+
+    for (path, item) in paths.iter().zip(items) {
+        if let Some(b64) = item.as_str() {
+            if !b64.is_empty() {
+                map.insert(path.clone(), format!("data:image/png;base64,{b64}"));
+            }
+        }
+    }
+    map
+}
+
+// Walk a directory (bounded depth and file budget) collecting executables.
+#[cfg(target_os = "windows")]
+fn collect_exes(dir: &Path, depth: u32, budget: &mut u32, out: &mut Vec<(PathBuf, u64)>) {
+    if depth == 0 || *budget == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if *budget == 0 {
+            return;
+        }
+        *budget -= 1;
+        let path = entry.path();
+        match entry.file_type() {
+            Ok(ft) if ft.is_dir() => collect_exes(&path, depth - 1, budget, out),
+            Ok(ft) if ft.is_file() => {
+                let is_exe = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("exe"))
+                    .unwrap_or(false);
+                if is_exe {
+                    let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                    out.push((path, size));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+// Best-effort guess of a game's main executable: the largest .exe that doesn't
+// look like an installer/redistributable/helper.
+#[cfg(target_os = "windows")]
+fn find_game_exe(dir: &Path) -> Option<PathBuf> {
+    const SKIP: [&str; 18] = [
+        "unins",
+        "setup",
+        "vcredist",
+        "vc_redist",
+        "dxsetup",
+        "dotnet",
+        "redist",
+        "crashpad",
+        "crashreport",
+        "crashhandler",
+        "easyanticheat",
+        "battleye",
+        "be_service",
+        "touchup",
+        "cleanup",
+        "prereq",
+        "oalinst",
+        "dxwebsetup",
+    ];
+
+    let mut exes = Vec::new();
+    let mut budget = 4000u32;
+    collect_exes(dir, 3, &mut budget, &mut exes);
+    exes.into_iter()
+        .filter(|(p, _)| {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            !SKIP.iter().any(|s| name.contains(s))
+        })
+        .max_by_key(|(_, size)| *size)
+        .map(|(p, _)| p)
+}
+
+#[cfg(target_os = "windows")]
+fn folder_name(dir: &str) -> String {
+    Path::new(dir)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(dir)
+        .to_string()
+}
+
+// Epic Games: JSON manifests under ProgramData. Launch via the
+// com.epicgames.launcher:// protocol.
+#[cfg(target_os = "windows")]
+fn scan_epic() -> Vec<Discovered> {
+    let program_data = std::env::var("PROGRAMDATA").unwrap_or_else(|_| "C:\\ProgramData".into());
+    let dir = Path::new(&program_data)
+        .join("Epic")
+        .join("EpicGamesLauncher")
+        .join("Data")
+        .join("Manifests");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_item = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.eq_ignore_ascii_case("item"))
+            .unwrap_or(false);
+        if !is_item {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_string();
+
+        let is_app = v
+            .get("bIsApplication")
+            .and_then(|x| x.as_bool())
+            .unwrap_or(false);
+        let is_game = v
+            .get("AppCategories")
+            .and_then(|x| x.as_array())
+            .map(|a| a.iter().any(|c| c.as_str() == Some("games")))
+            .unwrap_or(false);
+        if !is_app || !is_game {
+            continue;
+        }
+
+        let namespace = get("CatalogNamespace");
+        let item_id = get("CatalogItemId");
+        let app_name = get("AppName");
+        if namespace.is_empty() || item_id.is_empty() || app_name.is_empty() {
+            continue;
+        }
+        let name = get("DisplayName");
+        let install = get("InstallLocation");
+        let launch_exe = get("LaunchExecutable");
+        let icon_source = (!install.is_empty() && !launch_exe.is_empty())
+            .then(|| Path::new(&install).join(&launch_exe).to_string_lossy().into_owned());
+
+        out.push(Discovered {
+            app: App {
+                path: format!(
+                    "com.epicgames.launcher://apps/{namespace}%3A{item_id}%3A{app_name}?action=launch&silent=true"
+                ),
+                name,
+                image: String::new(),
+                description: "Epic".into(),
+            },
+            icon_source,
+        });
+    }
+    out
+}
+
+// Read registry-based launchers (GOG, Ubisoft, EA, Battle.net) in one shot.
+#[cfg(target_os = "windows")]
+fn scan_registry() -> serde_json::Value {
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+function Subkeys($path) { if (Test-Path $path) { Get-ChildItem $path } }
+$result = [ordered]@{}
+
+$gog = @()
+foreach ($k in Subkeys 'HKLM:\SOFTWARE\WOW6432Node\GOG.com\Games') {
+    $p = Get-ItemProperty $k.PSPath
+    if ($p.exe) { $gog += [pscustomobject]@{ name = $p.gameName; exe = $p.exe } }
+}
+$result.gog = $gog
+
+$ubisoft = @()
+foreach ($k in Subkeys 'HKLM:\SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs') {
+    $p = Get-ItemProperty $k.PSPath
+    if ($p.InstallDir) { $ubisoft += [pscustomobject]@{ id = $k.PSChildName; dir = $p.InstallDir } }
+}
+$result.ubisoft = $ubisoft
+
+$ea = @()
+foreach ($base in 'HKLM:\SOFTWARE\WOW6432Node\EA Games', 'HKLM:\SOFTWARE\WOW6432Node\Origin Games') {
+    foreach ($k in Subkeys $base) {
+        $p = Get-ItemProperty $k.PSPath
+        $dir = $p.'Install Dir'
+        if (-not $dir) { $dir = $p.InstallDir }
+        $name = $p.DisplayName
+        if (-not $name) { $name = $k.PSChildName }
+        if ($dir) { $ea += [pscustomobject]@{ name = $name; dir = $dir } }
+    }
+}
+$result.ea = $ea
+
+$blizzard = @()
+foreach ($base in 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall', 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall') {
+    foreach ($k in Subkeys $base) {
+        $p = Get-ItemProperty $k.PSPath
+        if ($p.Publisher -eq 'Blizzard Entertainment' -and $p.DisplayName -and $p.InstallLocation -and $p.DisplayName -ne 'Battle.net') {
+            $blizzard += [pscustomobject]@{ name = $p.DisplayName; dir = $p.InstallLocation; icon = $p.DisplayIcon }
+        }
+    }
+}
+$result.blizzard = $blizzard
+
+ConvertTo-Json -Compress -Depth 5 -InputObject $result
+"#;
+
+    let output = match windows_command("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return serde_json::Value::Null,
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    serde_json::from_str(stdout.trim()).unwrap_or(serde_json::Value::Null)
+}
+
+#[cfg(target_os = "windows")]
+fn registry_array<'a>(reg: &'a serde_json::Value, key: &str) -> Vec<&'a serde_json::Value> {
+    match reg.get(key) {
+        Some(serde_json::Value::Array(a)) => a.iter().collect(),
+        Some(other @ serde_json::Value::Object(_)) => vec![other],
+        _ => Vec::new(),
+    }
+}
+
+// GOG: DRM-free, launch the executable directly (lifetime is trackable).
+#[cfg(target_os = "windows")]
+fn scan_gog(reg: &serde_json::Value) -> Vec<Discovered> {
+    registry_array(reg, "gog")
+        .into_iter()
+        .filter_map(|item| {
+            let exe = item.get("exe")?.as_str()?.to_string();
+            if exe.is_empty() {
+                return None;
+            }
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| file_stem(&exe));
+            Some(Discovered {
+                app: App {
+                    path: exe.clone(),
+                    name,
+                    image: String::new(),
+                    description: "GOG".into(),
+                },
+                icon_source: Some(exe),
+            })
+        })
+        .collect()
+}
+
+// Ubisoft Connect: launch via uplay:// using the install id; icon from the
+// game's main exe.
+#[cfg(target_os = "windows")]
+fn scan_ubisoft(reg: &serde_json::Value) -> Vec<Discovered> {
+    registry_array(reg, "ubisoft")
+        .into_iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?.to_string();
+            let dir = item.get("dir")?.as_str()?.to_string();
+            let icon_source = find_game_exe(Path::new(&dir)).map(|p| p.to_string_lossy().into_owned());
+            Some(Discovered {
+                app: App {
+                    path: format!("uplay://launch/{id}/0"),
+                    name: folder_name(&dir),
+                    image: String::new(),
+                    description: "Ubisoft".into(),
+                },
+                icon_source,
+            })
+        })
+        .collect()
+}
+
+// EA app / Origin: registry gives the install dir; launch the main exe directly.
+#[cfg(target_os = "windows")]
+fn scan_ea(reg: &serde_json::Value) -> Vec<Discovered> {
+    registry_array(reg, "ea")
+        .into_iter()
+        .filter_map(|item| {
+            let dir = item.get("dir")?.as_str()?.to_string();
+            let exe = find_game_exe(Path::new(&dir))?.to_string_lossy().into_owned();
+            let name = item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| folder_name(&dir));
+            Some(Discovered {
+                app: App {
+                    path: exe.clone(),
+                    name,
+                    image: String::new(),
+                    description: "EA".into(),
+                },
+                icon_source: Some(exe),
+            })
+        })
+        .collect()
+}
+
+// Battle.net (Blizzard): detected via uninstall entries; launch the main exe.
+#[cfg(target_os = "windows")]
+fn scan_blizzard(reg: &serde_json::Value) -> Vec<Discovered> {
+    registry_array(reg, "blizzard")
+        .into_iter()
+        .filter_map(|item| {
+            let dir = item.get("dir")?.as_str()?.to_string();
+            let exe = find_game_exe(Path::new(&dir))?.to_string_lossy().into_owned();
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            Some(Discovered {
+                app: App {
+                    path: exe.clone(),
+                    name,
+                    image: String::new(),
+                    description: "Battle.net".into(),
+                },
+                icon_source: Some(exe),
+            })
+        })
+        .collect()
+}
+
+// itch.io: installs live under %APPDATA%\itch\apps\<slug>; launch the exe.
+#[cfg(target_os = "windows")]
+fn scan_itch() -> Vec<Discovered> {
+    let Ok(appdata) = std::env::var("APPDATA") else {
+        return Vec::new();
+    };
+    let dir = Path::new(&appdata).join("itch").join("apps");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let folder = entry.path();
+        if !folder.is_dir() {
+            continue;
+        }
+        let Some(exe) = find_game_exe(&folder).map(|p| p.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        out.push(Discovered {
+            app: App {
+                path: exe.clone(),
+                name: folder_name(&folder.to_string_lossy()),
+                image: String::new(),
+                description: "itch.io".into(),
+            },
+            icon_source: Some(exe),
+        });
+    }
+    out
+}
+
+// Amazon Games: default library; each game has a fuel.json describing its exe.
+#[cfg(target_os = "windows")]
+fn scan_amazon() -> Vec<Discovered> {
+    let library = PathBuf::from("C:\\Amazon Games\\Library");
+    let Ok(entries) = std::fs::read_dir(&library) else {
+        return Vec::new();
+    };
+
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let folder = entry.path();
+        if !folder.is_dir() {
+            continue;
+        }
+        // fuel.json names the launch command; fall back to a heuristic exe.
+        let exe = std::fs::read_to_string(folder.join("fuel.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .and_then(|v| {
+                v.get("Main")
+                    .and_then(|m| m.get("Command"))
+                    .and_then(|c| c.as_str())
+                    .map(|c| folder.join(c))
+            })
+            .filter(|p| p.exists())
+            .or_else(|| find_game_exe(&folder));
+
+        let Some(exe) = exe.map(|p| p.to_string_lossy().into_owned()) else {
+            continue;
+        };
+        out.push(Discovered {
+            app: App {
+                path: exe.clone(),
+                name: folder_name(&folder.to_string_lossy()),
+                image: String::new(),
+                description: "Amazon".into(),
+            },
+            icon_source: Some(exe),
+        });
+    }
+    out
+}
+
+#[cfg(target_os = "windows")]
+fn discover_games() -> Vec<App> {
+    let mut pending: Vec<Discovered> = Vec::new();
+    // These already carry on-disk artwork, so no icon extraction is needed.
+    pending.extend(scan_steam().into_iter().map(|app| Discovered { app, icon_source: None }));
+    pending.extend(scan_gamepass().into_iter().map(|app| Discovered { app, icon_source: None }));
+
+    pending.extend(scan_epic());
+    let reg = scan_registry();
+    pending.extend(scan_gog(&reg));
+    pending.extend(scan_ubisoft(&reg));
+    pending.extend(scan_ea(&reg));
+    pending.extend(scan_blizzard(&reg));
+    pending.extend(scan_itch());
+    pending.extend(scan_amazon());
+
+    // Extract all needed exe icons in a single batched call.
+    let mut sources: Vec<String> = pending
+        .iter()
+        .filter(|d| d.app.image.is_empty())
+        .filter_map(|d| d.icon_source.clone())
+        .collect();
+    sources.sort();
+    sources.dedup();
+    let icons = extract_exe_icons(&sources);
+
+    pending
+        .into_iter()
+        .map(|mut d| {
+            if d.app.image.is_empty() {
+                if let Some(src) = &d.icon_source {
+                    if let Some(img) = icons.get(src) {
+                        d.app.image = img.clone();
+                    }
+                }
+            }
+            d.app
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn discover_games() -> Vec<App> {
+    Vec::new()
+}
+
+// Discover installed games across all supported launchers, add any not already
+// present (deduped by launch target), persist, and return the full list.
+fn scan_and_merge(app: &tauri::AppHandle) -> Vec<App> {
+    let discovered = discover_games();
+
+    let state = app.state::<AppList>();
+    let mut list = state.0.lock().unwrap();
+    let mut seen: HashSet<String> = list.iter().map(|a| a.path.clone()).collect();
+    for game in discovered {
+        if seen.insert(game.path.clone()) {
+            list.push(game);
+        }
+    }
+    let result = list.clone();
+    drop(list);
+    save_apps(app, &result);
+    result
+}
+
+#[tauri::command]
+async fn scan_games(app: tauri::AppHandle) -> Vec<App> {
+    // Scanning shells out to PowerShell and the filesystem; keep it off the
+    // main thread so the UI stays responsive.
+    tauri::async_runtime::spawn_blocking(move || scan_and_merge(&app))
+        .await
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -159,8 +1103,20 @@ fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
 
 #[tauri::command]
 fn launch(path: String, window: tauri::WebviewWindow, app: tauri::AppHandle) {
-    let _ = window.close();
     std::thread::spawn(move || {
+        // On Windows, UWP/Store/Game Pass apps can't have their lifetime
+        // tracked. Launch them but leave the window open, since we'd never
+        // receive a reliable "app exited" signal to reopen it.
+        #[cfg(target_os = "windows")]
+        if !is_trackable(&path) {
+            launch_detached(&path);
+            return;
+        }
+
+        let win = window.clone();
+        let _ = app.run_on_main_thread(move || {
+            let _ = win.close();
+        });
         wait_for_app(&path);
         let handle = app.clone();
         let _ = app.run_on_main_thread(move || show_window(&handle));
@@ -172,7 +1128,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppList::default())
-        .invoke_handler(tauri::generate_handler![get_apps, add_apps, launch])
+        .invoke_handler(tauri::generate_handler![
+            get_apps,
+            add_apps,
+            launch,
+            scan_games
+        ])
         .setup(|app| {
             *app.state::<AppList>().0.lock().unwrap() = load_apps(app.handle());
 
@@ -209,13 +1170,15 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| match event {
-            // Keep the process alive (minimal, windowless) when the last window closes.
-            RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
-                api.prevent_exit();
+        .run(|_app, event| {
+            match event {
+                // Keep the process alive (minimal, windowless) when the last window closes.
+                RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
+                    api.prevent_exit();
+                }
+                #[cfg(target_os = "macos")]
+                RunEvent::Reopen { .. } => show_window(_app),
+                _ => {}
             }
-            #[cfg(target_os = "macos")]
-            RunEvent::Reopen { .. } => show_window(app),
-            _ => {}
         });
 }

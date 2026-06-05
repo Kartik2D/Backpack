@@ -8,6 +8,15 @@
   let box = $state();
   let cols = $state(1);
   let size = $state(0);
+  let scanning = $state(false);
+
+  function scan() {
+    if (scanning) return;
+    scanning = true;
+    invoke("scan_games")
+      .then((a) => (apps = a))
+      .finally(() => (scanning = false));
+  }
 
   // Pick the column count that yields the largest possible square for N items.
   function layout() {
@@ -33,7 +42,11 @@
   });
 
   onMount(() => {
-    invoke("get_apps").then((a) => (apps = a));
+    invoke("get_apps").then((a) => {
+      apps = a;
+      // Auto-scan once on startup to pick up newly installed games.
+      scan();
+    });
     const ro = new ResizeObserver(layout);
     if (box) ro.observe(box);
     const un = getCurrentWebview().onDragDropEvent((e) => {
@@ -47,6 +60,15 @@
     };
   });
 </script>
+
+<button
+  class="scan"
+  onclick={scan}
+  disabled={scanning}
+  title="Scan Steam and Xbox libraries for installed games"
+>
+  {scanning ? "Scanning…" : "Scan for games"}
+</button>
 
 <div
   class="grid"
@@ -142,5 +164,29 @@
   .hint {
     color: #666;
     font-size: 14px;
+  }
+
+  .scan {
+    position: fixed;
+    top: 10px;
+    right: 10px;
+    z-index: 10;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid #2e2e2e;
+    background: #222;
+    color: #e0e0e0;
+    font: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .scan:hover:not(:disabled) {
+    border-color: #555;
+    background: #2a2a2a;
+  }
+  .scan:disabled {
+    opacity: 0.6;
+    cursor: default;
   }
 </style>

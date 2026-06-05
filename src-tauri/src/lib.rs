@@ -43,70 +43,84 @@ fn save_apps(app: &tauri::AppHandle, list: &[App]) {
     }
 }
 
-// Extract the app's own icon as a base64 PNG data URI so it can be stored and
-// rendered offline.
-#[cfg(target_os = "macos")]
-fn app_icon(path: &str) -> Option<String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
+// Case-insensitive path key for duplicate detection on Windows.
+fn normalize_path_key(path: &str) -> String {
+    path.replace('\\', "/").to_lowercase()
+}
 
-    let resources = Path::new(path).join("Contents/Resources");
-    // Prefer the icon named in Info.plist, else fall back to the first .icns found.
-    let icns = std::process::Command::new("defaults")
-        .arg("read")
-        .arg(Path::new(path).join("Contents/Info"))
-        .arg("CFBundleIconFile")
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .map(|name| {
-            let p = resources.join(&name);
-            if p.extension().is_some() {
-                p
-            } else {
-                resources.join(format!("{name}.icns"))
-            }
-        })
-        .filter(|p| p.exists())
-        .or_else(|| {
-            std::fs::read_dir(&resources).ok()?.flatten().find_map(|e| {
-                let p = e.path();
-                (p.extension()?.eq_ignore_ascii_case("icns")).then_some(p)
-            })
-        })?;
-
-    let png = std::env::temp_dir().join("backpack_icon.png");
-    Command::new("sips")
-        .args(["-s", "format", "png"])
-        .arg(&icns)
-        .arg("--out")
-        .arg(&png)
-        .output()
-        .ok()
-        .filter(|o| o.status.success())?;
-
-    let bytes = std::fs::read(&png).ok()?;
-    Some(format!("data:image/png;base64,{}", STANDARD.encode(bytes)))
+fn dedupe_apps(mut apps: Vec<App>) -> Vec<App> {
+    let mut seen = HashSet::new();
+    apps.retain(|a| seen.insert(normalize_path_key(&a.path)));
+    apps
 }
 
 #[cfg(target_os = "windows")]
-fn app_icon(path: &str) -> Option<String> {
-    // The path is passed via an env var (not $args): with `-Command`, trailing
-    // arguments are appended to the command string rather than exposed as $args.
+struct InstallIndex {
+    steam_appids: HashSet<String>,
+    epic_paths: HashSet<String>,
+    aumids: HashSet<String>,
+    ubisoft_ids: HashSet<String>,
+}
+
+#[cfg(target_os = "windows")]
+fn build_install_index() -> InstallIndex {
+    let mut steam_appids = HashSet::new();
+    if let Some(steam) = steam_path() {
+        let library_file = steam.join("steamapps").join("libraryfolders.vdf");
+        if let Ok(content) = std::fs::read_to_string(&library_file) {
+            let mut libraries = vec![steam];
+            libraries.extend(vdf_values(&content, "path").into_iter().map(PathBuf::from));
+            for library in libraries {
+                let steamapps = library.join("steamapps");
+                let Ok(entries) = std::fs::read_dir(&steamapps) else {
+                    continue;
+                };
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else {
+                        continue;
+                    };
+                    if let Some(appid) = name
+                        .strip_prefix("appmanifest_")
+                        .and_then(|s| s.strip_suffix(".acf"))
+                    {
+                        steam_appids.insert(appid.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    let epic_paths = scan_epic()
+        .into_iter()
+        .map(|d| normalize_path_key(&d.app.path))
+        .collect();
+
+    let aumids = installed_aumids();
+
+    let mut ubisoft_ids = HashSet::new();
+    for item in registry_array(&scan_registry(), "ubisoft") {
+        if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+            ubisoft_ids.insert(id.to_string());
+        }
+    }
+
+    InstallIndex {
+        steam_appids,
+        epic_paths,
+        aumids,
+        ubisoft_ids,
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn installed_aumids() -> HashSet<String> {
     let script = r#"
-Add-Type -AssemblyName System.Drawing
-$icon = [System.Drawing.Icon]::ExtractAssociatedIcon($env:BACKPACK_ICON_PATH)
-if ($null -eq $icon) { exit 1 }
-$bitmap = $icon.ToBitmap()
-$stream = [System.IO.MemoryStream]::new()
-$bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Png)
-[Convert]::ToBase64String($stream.ToArray())
-$stream.Dispose()
-$bitmap.Dispose()
-$icon.Dispose()
+$ErrorActionPreference = 'SilentlyContinue'
+Get-StartApps | ForEach-Object { 'shell:appsfolder\' + $_.AppID.ToLower() }
 "#;
 
-    let output = windows_command("powershell.exe")
+    let output = match windows_command("powershell.exe")
         .args([
             "-NoProfile",
             "-ExecutionPolicy",
@@ -114,18 +128,278 @@ $icon.Dispose()
             "-Command",
             script,
         ])
-        .env("BACKPACK_ICON_PATH", path)
         .output()
-        .ok()
-        .filter(|o| o.status.success())?;
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return HashSet::new(),
+    };
 
-    let encoded = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (!encoded.is_empty()).then(|| format!("data:image/png;base64,{encoded}"))
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(normalize_path_key)
+        .collect()
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn app_icon(_path: &str) -> Option<String> {
-    None
+#[cfg(target_os = "windows")]
+fn app_still_exists(path: &str, index: &InstallIndex) -> bool {
+    let lower = path.to_lowercase();
+
+    if let Some(appid) = lower.strip_prefix("steam://rungameid/") {
+        let appid = appid.trim_end_matches('/');
+        return index.steam_appids.contains(appid);
+    }
+
+    if lower.starts_with("com.epicgames.launcher://") {
+        return index.epic_paths.contains(&normalize_path_key(path));
+    }
+
+    if lower.starts_with("shell:appsfolder") {
+        return index.aumids.contains(&normalize_path_key(path));
+    }
+
+    if let Some(rest) = lower.strip_prefix("uplay://launch/") {
+        let id = rest.split('/').next().unwrap_or("");
+        return index.ubisoft_ids.contains(id);
+    }
+
+    if lower.ends_with(".lnk") {
+        if !Path::new(path).exists() {
+            return false;
+        }
+        return match resolve_lnk_target(path) {
+            Some(target) if target.is_empty() => true,
+            Some(target) => Path::new(&target).exists(),
+            None => Path::new(path).exists(),
+        };
+    }
+
+    // Unknown custom protocols are kept to avoid false removals.
+    if lower.contains("://") {
+        return true;
+    }
+
+    Path::new(path).exists()
+}
+
+#[cfg(target_os = "windows")]
+fn prune_missing(apps: Vec<App>) -> Vec<App> {
+    let index = build_install_index();
+    apps.into_iter()
+        .filter(|a| app_still_exists(&a.path, &index))
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn prune_missing(apps: Vec<App>) -> Vec<App> {
+    apps.into_iter()
+        .filter(|a| Path::new(&a.path).exists())
+        .collect()
+}
+
+fn clean_apps(apps: Vec<App>) -> Vec<App> {
+    dedupe_apps(prune_missing(apps))
+}
+
+// Existence check for manually dropped local paths (.exe, .app, .lnk).
+fn local_path_exists(path: &str) -> bool {
+    if !Path::new(path).exists() {
+        return false;
+    }
+    #[cfg(target_os = "windows")]
+    if path.to_lowercase().ends_with(".lnk") {
+        return match resolve_lnk_target(path) {
+            Some(target) if target.is_empty() => true,
+            Some(target) => Path::new(&target).exists(),
+            None => true,
+        };
+    }
+    true
+}
+
+#[derive(Deserialize)]
+struct IgdbToken {
+    access_token: String,
+}
+
+#[derive(Deserialize)]
+struct IgdbCover {
+    image_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct IgdbGame {
+    id: Option<i64>,
+    name: Option<String>,
+    summary: Option<String>,
+    cover: Option<IgdbCover>,
+}
+
+#[derive(Clone, Serialize)]
+struct IgdbSearchResult {
+    id: i64,
+    name: String,
+    image: String,
+    description: String,
+}
+
+struct IgdbClient {
+    client_id: String,
+    access_token: String,
+    http: reqwest::blocking::Client,
+}
+
+impl IgdbClient {
+    fn from_env() -> Option<Self> {
+        let client_id = std::env::var("IGDB_CLIENT_ID")
+            .or_else(|_| std::env::var("TWITCH_CLIENT_ID"))
+            .ok()?;
+        let http = reqwest::blocking::Client::new();
+        let access_token = std::env::var("IGDB_ACCESS_TOKEN")
+            .or_else(|_| std::env::var("TWITCH_ACCESS_TOKEN"))
+            .ok()
+            .or_else(|| {
+                let client_secret = std::env::var("IGDB_CLIENT_SECRET")
+                    .or_else(|_| std::env::var("TWITCH_CLIENT_SECRET"))
+                    .ok()?;
+                http.post("https://id.twitch.tv/oauth2/token")
+                    .query(&[
+                        ("client_id", client_id.as_str()),
+                        ("client_secret", client_secret.as_str()),
+                        ("grant_type", "client_credentials"),
+                    ])
+                    .send()
+                    .ok()?
+                    .error_for_status()
+                    .ok()?
+                    .json::<IgdbToken>()
+                    .ok()
+                    .map(|t| t.access_token)
+            })?;
+
+        Some(Self {
+            client_id,
+            access_token,
+            http,
+        })
+    }
+
+    fn lookup_game(&self, name: &str) -> Option<AppMetadata> {
+        self.search_games(name).into_iter().next().map(|result| {
+            let image = if result.image.is_empty() {
+                None
+            } else {
+                Some(result.image.replace("t_cover_small", "t_cover_big"))
+            };
+            AppMetadata {
+                name: Some(result.name),
+                image,
+                description: (!result.description.is_empty()).then_some(result.description),
+            }
+        })
+    }
+
+    fn search_games(&self, name: &str) -> Vec<IgdbSearchResult> {
+        let search = igdb_search_name(name);
+        if search.is_empty() {
+            return Vec::new();
+        }
+        let query = format!(
+            "search \"{}\"; fields name,summary,cover.image_id; limit 12;",
+            escape_igdb_string(&search)
+        );
+        self
+            .http
+            .post("https://api.igdb.com/v4/games")
+            .header("Client-ID", &self.client_id)
+            .header("Authorization", format!("Bearer {}", self.access_token))
+            .body(query)
+            .send()
+            .ok()
+            .and_then(|r| r.error_for_status().ok())
+            .and_then(|r| r.json::<Vec<IgdbGame>>().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|game| {
+                let id = game.id?;
+                let name = game.name?;
+                Some(IgdbSearchResult {
+                    id,
+                    name,
+                    image: game
+                        .cover
+                        .and_then(|cover| cover.image_id)
+                        .map(|id| igdb_cover_url(&id, "cover_small"))
+                        .unwrap_or_default(),
+                    description: game.summary.unwrap_or_default(),
+                })
+            })
+            .collect()
+    }
+}
+
+fn search_igdb(query: &str) -> Vec<IgdbSearchResult> {
+    IgdbClient::from_env()
+        .map(|igdb| igdb.search_games(query))
+        .unwrap_or_default()
+}
+
+fn igdb_cover_url(image_id: &str, size: &str) -> String {
+    format!("https://images.igdb.com/igdb/image/upload/t_{size}/{image_id}.jpg")
+}
+
+fn apply_metadata_to_app(app: &mut App, metadata: AppMetadata) {
+    if let Some(name) = metadata.name.filter(|s| !s.is_empty()) {
+        app.name = name;
+    }
+    if let Some(image) = metadata.image.filter(|s| !s.is_empty()) {
+        app.image = image.replace("t_cover_small", "t_cover_big");
+    }
+    if let Some(description) = metadata.description.filter(|s| !s.is_empty()) {
+        app.description = description;
+    }
+}
+
+struct AppMetadata {
+    name: Option<String>,
+    image: Option<String>,
+    description: Option<String>,
+}
+
+fn escape_igdb_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn igdb_search_name(name: &str) -> String {
+    name.replace(['_', '-'], " ")
+        .replace('™', "")
+        .replace('®', "")
+        .trim()
+        .to_string()
+}
+
+fn enrich_with_igdb(apps: Vec<App>) -> Vec<App> {
+    let Some(igdb) = IgdbClient::from_env() else {
+        return apps;
+    };
+
+    apps.into_iter()
+        .map(|mut app| {
+            if let Some(metadata) = igdb.lookup_game(&app.name) {
+                if let Some(name) = metadata.name.filter(|s| !s.is_empty()) {
+                    app.name = name;
+                }
+                if let Some(image) = metadata.image.filter(|s| !s.is_empty()) {
+                    app.image = image;
+                }
+                if let Some(description) = metadata.description.filter(|s| !s.is_empty()) {
+                    app.description = description;
+                }
+            }
+            app
+        })
+        .collect()
 }
 
 #[cfg(target_os = "windows")]
@@ -275,24 +549,6 @@ fn is_trackable(path: &str) -> bool {
     true
 }
 
-// Read an image file and return it as a base64 data URI.
-#[cfg(target_os = "windows")]
-fn encode_image(path: &Path) -> Option<String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
-    let bytes = std::fs::read(path).ok()?;
-    let mime = match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(str::to_lowercase)
-        .as_deref()
-    {
-        Some("jpg") | Some("jpeg") => "image/jpeg",
-        _ => "image/png",
-    };
-    Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
-}
-
 // Extract single-line `"key" "value"` entries from a Valve VDF/ACF file.
 #[cfg(target_os = "windows")]
 fn vdf_values(content: &str, key: &str) -> Vec<String> {
@@ -328,47 +584,6 @@ fn steam_path() -> Option<PathBuf> {
 
     let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
     (!path.is_empty()).then(|| PathBuf::from(path))
-}
-
-#[cfg(target_os = "windows")]
-fn steam_icon(steam: &Path, appid: &str) -> Option<String> {
-    let cache = steam.join("appcache").join("librarycache");
-    // Older Steam layout: flat files keyed by appid.
-    for name in [
-        format!("{appid}_icon.jpg"),
-        format!("{appid}_library_600x900.jpg"),
-        format!("{appid}_header.jpg"),
-    ] {
-        let p = cache.join(&name);
-        if p.exists() {
-            return encode_image(&p);
-        }
-    }
-    // Newer Steam layout: a per-appid folder of hashed images.
-    let folder = cache.join(appid);
-    let mut best: Option<PathBuf> = None;
-    if let Ok(entries) = std::fs::read_dir(&folder) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let is_image = p
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| matches!(e.to_lowercase().as_str(), "jpg" | "jpeg" | "png"))
-                .unwrap_or(false);
-            if !is_image {
-                continue;
-            }
-            let larger = match &best {
-                Some(b) => entry.metadata().map(|m| m.len()).unwrap_or(0)
-                    > std::fs::metadata(b).map(|m| m.len()).unwrap_or(0),
-                None => true,
-            };
-            if larger {
-                best = Some(p);
-            }
-        }
-    }
-    best.as_deref().and_then(encode_image)
 }
 
 #[cfg(target_os = "windows")]
@@ -420,8 +635,8 @@ fn scan_steam() -> Vec<App> {
             games.push(App {
                 path: format!("steam://rungameid/{appid}"),
                 name,
-                image: steam_icon(&steam, &appid).unwrap_or_default(),
-                description: "Steam".into(),
+                image: String::new(),
+                description: String::new(),
             });
         }
     }
@@ -432,7 +647,7 @@ fn scan_steam() -> Vec<App> {
 fn scan_gamepass() -> Vec<App> {
     // Enumerate installed Store packages, keep only those that are Xbox games
     // (identified by a MicrosoftGame.config in their real install dir), and emit
-    // their launch AUMID plus a best-effort tile logo path.
+    // their launch AUMID. IGDB fills image/description later.
     let script = r#"
 $ErrorActionPreference = 'SilentlyContinue'
 $starts = @{}
@@ -450,21 +665,7 @@ foreach ($p in Get-AppxPackage) {
     $aumid = $p.PackageFamilyName + '!' + $appId
     $name = $starts[$aumid]
     if (-not $name) { $name = $p.Name }
-    $logo = $null
-    $assets = Join-Path $loc 'Assets'
-    $cand = $null
-    if (Test-Path $assets) {
-        $cand = Get-ChildItem -Path $assets -Recurse -File -Filter '*Square150x150Logo*' |
-            Where-Object { $_.Extension -in '.png', '.jpg' } |
-            Sort-Object Length -Descending | Select-Object -First 1
-    }
-    if (-not $cand) {
-        $cand = Get-ChildItem -Path $loc -File -Filter '*Square150x150Logo*' |
-            Where-Object { $_.Extension -in '.png', '.jpg' } |
-            Sort-Object Length -Descending | Select-Object -First 1
-    }
-    if ($cand) { $logo = $cand.FullName }
-    $out += [pscustomobject]@{ name = $name; path = ('shell:AppsFolder\' + $aumid); logo = $logo }
+    $out += [pscustomobject]@{ name = $name; path = ('shell:AppsFolder\' + $aumid) }
 }
 if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -Compress -InputObject @($out) }
 "#;
@@ -507,93 +708,20 @@ if ($out.Count -eq 0) { '[]' } else { ConvertTo-Json -Compress -InputObject @($o
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let image = item
-                .get("logo")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .and_then(|s| encode_image(Path::new(s)))
-                .unwrap_or_default();
             Some(App {
                 path,
                 name,
-                image,
-                description: "Xbox".into(),
+                image: String::new(),
+                description: String::new(),
             })
         })
         .collect()
 }
 
-// A discovered game plus an optional executable to extract an icon from later
-// (batched), used when the tile image isn't already a cheap on-disk asset.
+// A discovered game before the IGDB metadata pass.
 #[cfg(target_os = "windows")]
 struct Discovered {
     app: App,
-    icon_source: Option<String>,
-}
-
-// Batch-extract icons for a set of executables in a single PowerShell call.
-// Returns a map of exe path -> base64 PNG data URI. Doing this once (instead of
-// once per game) keeps a full multi-launcher scan fast.
-#[cfg(target_os = "windows")]
-fn extract_exe_icons(paths: &[String]) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    if paths.is_empty() {
-        return map;
-    }
-
-    let script = r#"
-Add-Type -AssemblyName System.Drawing
-$paths = $env:BACKPACK_ICON_PATHS -split '\|'
-$out = @()
-foreach ($p in $paths) {
-    try {
-        $icon = [System.Drawing.Icon]::ExtractAssociatedIcon($p)
-        if ($null -eq $icon) { $out += ''; continue }
-        $bmp = $icon.ToBitmap()
-        $ms = New-Object System.IO.MemoryStream
-        $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-        $out += [Convert]::ToBase64String($ms.ToArray())
-        $ms.Dispose(); $bmp.Dispose(); $icon.Dispose()
-    } catch { $out += '' }
-}
-ConvertTo-Json -Compress -InputObject @($out)
-"#;
-
-    let output = match windows_command("powershell.exe")
-        .args([
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            script,
-        ])
-        .env("BACKPACK_ICON_PATHS", paths.join("|"))
-        .output()
-    {
-        Ok(o) if o.status.success() => o,
-        _ => return map,
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let value: serde_json::Value = match serde_json::from_str(stdout.trim()) {
-        Ok(v) => v,
-        Err(_) => return map,
-    };
-    // One path yields a bare JSON string instead of an array.
-    let items = match value {
-        serde_json::Value::Array(a) => a,
-        other @ serde_json::Value::String(_) => vec![other],
-        _ => return map,
-    };
-
-    for (path, item) in paths.iter().zip(items) {
-        if let Some(b64) = item.as_str() {
-            if !b64.is_empty() {
-                map.insert(path.clone(), format!("data:image/png;base64,{b64}"));
-            }
-        }
-    }
-    map
 }
 
 // Walk a directory (bounded depth and file budget) collecting executables.
@@ -732,11 +860,6 @@ fn scan_epic() -> Vec<Discovered> {
             continue;
         }
         let name = get("DisplayName");
-        let install = get("InstallLocation");
-        let launch_exe = get("LaunchExecutable");
-        let icon_source = (!install.is_empty() && !launch_exe.is_empty())
-            .then(|| Path::new(&install).join(&launch_exe).to_string_lossy().into_owned());
-
         out.push(Discovered {
             app: App {
                 path: format!(
@@ -744,9 +867,8 @@ fn scan_epic() -> Vec<Discovered> {
                 ),
                 name,
                 image: String::new(),
-                description: "Epic".into(),
+                description: String::new(),
             },
-            icon_source,
         });
     }
     out
@@ -849,9 +971,8 @@ fn scan_gog(reg: &serde_json::Value) -> Vec<Discovered> {
                     path: exe.clone(),
                     name,
                     image: String::new(),
-                    description: "GOG".into(),
+                    description: String::new(),
                 },
-                icon_source: Some(exe),
             })
         })
         .collect()
@@ -866,15 +987,13 @@ fn scan_ubisoft(reg: &serde_json::Value) -> Vec<Discovered> {
         .filter_map(|item| {
             let id = item.get("id")?.as_str()?.to_string();
             let dir = item.get("dir")?.as_str()?.to_string();
-            let icon_source = find_game_exe(Path::new(&dir)).map(|p| p.to_string_lossy().into_owned());
             Some(Discovered {
                 app: App {
                     path: format!("uplay://launch/{id}/0"),
                     name: folder_name(&dir),
                     image: String::new(),
-                    description: "Ubisoft".into(),
+                    description: String::new(),
                 },
-                icon_source,
             })
         })
         .collect()
@@ -899,9 +1018,8 @@ fn scan_ea(reg: &serde_json::Value) -> Vec<Discovered> {
                     path: exe.clone(),
                     name,
                     image: String::new(),
-                    description: "EA".into(),
+                    description: String::new(),
                 },
-                icon_source: Some(exe),
             })
         })
         .collect()
@@ -921,9 +1039,8 @@ fn scan_blizzard(reg: &serde_json::Value) -> Vec<Discovered> {
                     path: exe.clone(),
                     name,
                     image: String::new(),
-                    description: "Battle.net".into(),
+                    description: String::new(),
                 },
-                icon_source: Some(exe),
             })
         })
         .collect()
@@ -954,9 +1071,8 @@ fn scan_itch() -> Vec<Discovered> {
                 path: exe.clone(),
                 name: folder_name(&folder.to_string_lossy()),
                 image: String::new(),
-                description: "itch.io".into(),
+                description: String::new(),
             },
-            icon_source: Some(exe),
         });
     }
     out
@@ -997,9 +1113,8 @@ fn scan_amazon() -> Vec<Discovered> {
                 path: exe.clone(),
                 name: folder_name(&folder.to_string_lossy()),
                 image: String::new(),
-                description: "Amazon".into(),
+                description: String::new(),
             },
-            icon_source: Some(exe),
         });
     }
     out
@@ -1008,9 +1123,8 @@ fn scan_amazon() -> Vec<Discovered> {
 #[cfg(target_os = "windows")]
 fn discover_games() -> Vec<App> {
     let mut pending: Vec<Discovered> = Vec::new();
-    // These already carry on-disk artwork, so no icon extraction is needed.
-    pending.extend(scan_steam().into_iter().map(|app| Discovered { app, icon_source: None }));
-    pending.extend(scan_gamepass().into_iter().map(|app| Discovered { app, icon_source: None }));
+    pending.extend(scan_steam().into_iter().map(|app| Discovered { app }));
+    pending.extend(scan_gamepass().into_iter().map(|app| Discovered { app }));
 
     pending.extend(scan_epic());
     let reg = scan_registry();
@@ -1021,29 +1135,7 @@ fn discover_games() -> Vec<App> {
     pending.extend(scan_itch());
     pending.extend(scan_amazon());
 
-    // Extract all needed exe icons in a single batched call.
-    let mut sources: Vec<String> = pending
-        .iter()
-        .filter(|d| d.app.image.is_empty())
-        .filter_map(|d| d.icon_source.clone())
-        .collect();
-    sources.sort();
-    sources.dedup();
-    let icons = extract_exe_icons(&sources);
-
-    pending
-        .into_iter()
-        .map(|mut d| {
-            if d.app.image.is_empty() {
-                if let Some(src) = &d.icon_source {
-                    if let Some(img) = icons.get(src) {
-                        d.app.image = img.clone();
-                    }
-                }
-            }
-            d.app
-        })
-        .collect()
+    dedupe_apps(pending.into_iter().map(|d| d.app).collect())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -1051,18 +1143,73 @@ fn discover_games() -> Vec<App> {
     Vec::new()
 }
 
-// Discover installed games across all supported launchers, add any not already
-// present (deduped by launch target), persist, and return the full list.
+// Discover installed games across all supported launchers, drop entries the user
+// uninstalled outside Backpack, dedupe, merge new finds, persist, and return.
 fn scan_and_merge(app: &tauri::AppHandle) -> Vec<App> {
     let discovered = discover_games();
 
     let state = app.state::<AppList>();
     let mut list = state.0.lock().unwrap();
-    let mut seen: HashSet<String> = list.iter().map(|a| a.path.clone()).collect();
+    *list = clean_apps(list.clone());
+
+    let mut seen: HashSet<String> = list.iter().map(|a| normalize_path_key(&a.path)).collect();
+    let mut additions = Vec::new();
     for game in discovered {
-        if seen.insert(game.path.clone()) {
-            list.push(game);
+        if seen.insert(normalize_path_key(&game.path)) {
+            additions.push(game);
         }
+    }
+
+    list.extend(enrich_with_igdb(additions));
+    let result = dedupe_apps(list.clone());
+    *list = result.clone();
+    drop(list);
+    save_apps(app, &result);
+    result
+}
+
+fn refresh_all_metadata(app: &tauri::AppHandle) -> Vec<App> {
+    let state = app.state::<AppList>();
+    let list = state.0.lock().unwrap().clone();
+    let result = enrich_with_igdb(dedupe_apps(prune_missing(list)));
+    *state.0.lock().unwrap() = result.clone();
+    save_apps(app, &result);
+    result
+}
+
+fn remove_app_from_list(path: &str, app: &tauri::AppHandle) -> Vec<App> {
+    let key = normalize_path_key(path);
+    let state = app.state::<AppList>();
+    let mut list = state.0.lock().unwrap();
+    list.retain(|item| normalize_path_key(&item.path) != key);
+    let result = list.clone();
+    drop(list);
+    save_apps(app, &result);
+    result
+}
+
+fn apply_selected_metadata(
+    path: &str,
+    name: String,
+    image: String,
+    description: String,
+    app: &tauri::AppHandle,
+) -> Vec<App> {
+    let key = normalize_path_key(path);
+    let state = app.state::<AppList>();
+    let mut list = state.0.lock().unwrap();
+    if let Some(item) = list
+        .iter_mut()
+        .find(|item| normalize_path_key(&item.path) == key)
+    {
+        apply_metadata_to_app(
+            item,
+            AppMetadata {
+                name: Some(name),
+                image: Some(image),
+                description: Some(description),
+            },
+        );
     }
     let result = list.clone();
     drop(list);
@@ -1080,25 +1227,69 @@ async fn scan_games(app: tauri::AppHandle) -> Vec<App> {
 }
 
 #[tauri::command]
+async fn get_metadata(app: tauri::AppHandle) -> Vec<App> {
+    tauri::async_runtime::spawn_blocking(move || refresh_all_metadata(&app))
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+async fn igdb_search(query: String) -> Vec<IgdbSearchResult> {
+    tauri::async_runtime::spawn_blocking(move || search_igdb(&query))
+        .await
+        .unwrap_or_default()
+}
+
+#[tauri::command]
 fn get_apps(list: tauri::State<AppList>) -> Vec<App> {
     list.0.lock().unwrap().clone()
 }
 
 #[tauri::command]
+fn remove_app(path: String, app: tauri::AppHandle) -> Vec<App> {
+    remove_app_from_list(&path, &app)
+}
+
+#[tauri::command]
+fn apply_metadata(
+    path: String,
+    name: String,
+    image: String,
+    description: String,
+    app: tauri::AppHandle,
+) -> Vec<App> {
+    apply_selected_metadata(&path, name, image, description, &app)
+}
+
+#[tauri::command]
 fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
     let state = app.state::<AppList>();
+    let existing = state.0.lock().unwrap().clone();
+    let mut seen: HashSet<String> = existing.iter().map(|a| normalize_path_key(&a.path)).collect();
+    let mut additions = Vec::new();
+
     for path in paths {
-        let image = app_icon(&path).unwrap_or_default();
-        state.0.lock().unwrap().push(App {
+        let key = normalize_path_key(&path);
+        if seen.contains(&key) || !local_path_exists(&path) {
+            continue;
+        }
+        seen.insert(key);
+        additions.push(App {
             name: file_stem(&path),
             path,
-            image,
+            image: String::new(),
             description: String::new(),
         });
     }
-    let list = state.0.lock().unwrap().clone();
-    save_apps(&app, &list);
-    list
+
+    let additions = enrich_with_igdb(additions);
+    let mut list = state.0.lock().unwrap();
+    list.extend(additions);
+    let result = dedupe_apps(list.clone());
+    *list = result.clone();
+    drop(list);
+    save_apps(&app, &result);
+    result
 }
 
 #[tauri::command]
@@ -1132,10 +1323,20 @@ pub fn run() {
             get_apps,
             add_apps,
             launch,
-            scan_games
+            scan_games,
+            get_metadata,
+            remove_app,
+            igdb_search,
+            apply_metadata
         ])
         .setup(|app| {
-            *app.state::<AppList>().0.lock().unwrap() = load_apps(app.handle());
+            let loaded = load_apps(app.handle());
+            let original_len = loaded.len();
+            let cleaned = clean_apps(loaded);
+            *app.state::<AppList>().0.lock().unwrap() = cleaned.clone();
+            if cleaned.len() != original_len {
+                save_apps(app.handle(), &cleaned);
+            }
 
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

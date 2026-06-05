@@ -76,6 +76,21 @@
     }
   }
 
+  async function launchApp(app) {
+    // Launch is fire-and-forget on the backend (it spawns a thread and returns
+    // immediately), so show a self-dismissing toast: launching can take a few
+    // seconds while the OS resolves shortcuts and spins up the game/launcher.
+    const toastId = toasts.loading(`Launching ${app.name}…`);
+    window.setTimeout(() => toasts.dismiss(toastId), 6000);
+    try {
+      await invoke("launch", { path: app.path });
+    } catch (error) {
+      console.error(error);
+      toasts.dismiss(toastId);
+      toasts.error(`Failed to launch ${app.name}.`);
+    }
+  }
+
   function openMetadata(app) {
     metadataGame = app;
     metadataOpen = true;
@@ -107,8 +122,6 @@
   onMount(() => {
     invoke("get_apps").then((a) => {
       apps = a;
-      // Auto-scan once on startup to pick up newly installed games.
-      scan();
     });
     const ro = new ResizeObserver(layout);
     if (box) ro.observe(box);
@@ -143,7 +156,7 @@
           <button
             class="card"
             title={app.description}
-            onclick={() => invoke("launch", { path: app.path })}
+            onclick={() => launchApp(app)}
           >
             {#if app.image}
               <img src={app.image} alt="" />

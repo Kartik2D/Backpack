@@ -91,13 +91,11 @@ fn scan_steam() -> Vec<App> {
                 .into_iter()
                 .next()
                 .map(|dir| path_string(&steamapps.join("common").join(dir)));
-            games.push(App {
-                path: format!("steam://rungameid/{appid}"),
+            games.push(App::with_name(
+                format!("steam://rungameid/{appid}"),
                 name,
-                image: String::new(),
-                description: String::new(),
                 install_dir,
-            });
+            ));
         }
     }
     games
@@ -233,15 +231,13 @@ pub fn scan_epic() -> Vec<Discovered> {
         let name = get("DisplayName");
         let install_dir = get("InstallLocation");
         out.push(Discovered {
-            app: App {
-                path: format!(
+            app: App::with_name(
+                format!(
                     "com.epicgames.launcher://apps/{namespace}%3A{item_id}%3A{app_name}?action=launch&silent=true"
                 ),
                 name,
-                image: String::new(),
-                description: String::new(),
-                install_dir: (!install_dir.is_empty()).then_some(install_dir),
-            },
+                (!install_dir.is_empty()).then_some(install_dir),
+            ),
         });
     }
     out
@@ -260,13 +256,7 @@ fn scan_gog() -> Vec<Discovered> {
                 .unwrap_or_else(|| file_stem(&item.exe));
             let install_dir = Path::new(&item.exe).parent().map(path_string);
             Some(Discovered {
-                app: App {
-                    path: item.exe,
-                    name,
-                    image: String::new(),
-                    description: String::new(),
-                    install_dir,
-                },
+                app: App::with_name(item.exe, name, install_dir),
             })
         })
         .collect()
@@ -277,13 +267,11 @@ fn scan_ubisoft() -> Vec<Discovered> {
     registry::ubisoft_installs()
         .into_iter()
         .map(|item| Discovered {
-            app: App {
-                path: format!("uplay://launch/{}/0", item.id),
-                name: folder_name(&item.dir),
-                image: String::new(),
-                description: String::new(),
-                install_dir: Some(item.dir),
-            },
+            app: App::with_name(
+                format!("uplay://launch/{}/0", item.id),
+                folder_name(&item.dir),
+                Some(item.dir),
+            ),
         })
         .collect()
 }
@@ -302,13 +290,7 @@ fn scan_ea() -> Vec<Discovered> {
                 item.name
             };
             Some(Discovered {
-                app: App {
-                    path: exe,
-                    name,
-                    image: String::new(),
-                    description: String::new(),
-                    install_dir: Some(item.dir),
-                },
+                app: App::with_name(exe, name, Some(item.dir)),
             })
         })
         .collect()
@@ -323,13 +305,7 @@ fn scan_blizzard() -> Vec<Discovered> {
                 .to_string_lossy()
                 .into_owned();
             Some(Discovered {
-                app: App {
-                    path: exe,
-                    name: item.name,
-                    image: String::new(),
-                    description: String::new(),
-                    install_dir: Some(item.dir),
-                },
+                app: App::with_name(exe, item.name, Some(item.dir)),
             })
         })
         .collect()
@@ -355,13 +331,11 @@ fn scan_itch() -> Vec<Discovered> {
             continue;
         };
         out.push(Discovered {
-            app: App {
-                path: exe,
-                name: folder_name(&folder.to_string_lossy()),
-                image: String::new(),
-                description: String::new(),
-                install_dir: Some(path_string(&folder)),
-            },
+            app: App::with_name(
+                exe,
+                folder_name(&folder.to_string_lossy()),
+                Some(path_string(&folder)),
+            ),
         });
     }
     out
@@ -397,13 +371,11 @@ fn scan_amazon() -> Vec<Discovered> {
             continue;
         };
         out.push(Discovered {
-            app: App {
-                path: exe,
-                name: folder_name(&folder.to_string_lossy()),
-                image: String::new(),
-                description: String::new(),
-                install_dir: Some(path_string(&folder)),
-            },
+            app: App::with_name(
+                exe,
+                folder_name(&folder.to_string_lossy()),
+                Some(path_string(&folder)),
+            ),
         });
     }
     out

@@ -84,7 +84,7 @@ impl IgdbClient {
             return Vec::new();
         }
         let query = format!(
-            "search \"{}\"; fields name,summary,cover.image_id; limit 12;",
+            "fields name,summary,cover.image_id; where name ~ *\"{}\"* & game_type = 0 & version_parent = null; limit 5;",
             escape_igdb_string(&search)
         );
         self.http

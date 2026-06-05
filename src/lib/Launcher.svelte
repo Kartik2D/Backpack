@@ -9,7 +9,7 @@
   import Toolbar from "$lib/Toolbar.svelte";
   import { toasts } from "$lib/toast.svelte.ts";
 
-  /** @typedef {{ path: string, name: string, image: string, description: string, install_dir?: string | null }} GameApp */
+  /** @typedef {{ path: string, name: string, original_name?: string, image: string, description: string, install_dir?: string | null }} GameApp */
   /** @typedef {{ path: string, state: "launching" | "playing" | "stopped", session_secs?: number | null }} GameStateEvent */
 
   const GAP = 10;

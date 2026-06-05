@@ -3,7 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { toasts } from "$lib/toast.svelte.ts";
 
-  /** @typedef {{ path: string, name: string }} GameApp */
+  /** @typedef {{ path: string, name: string, original_name?: string }} GameApp */
   /** @typedef {{ name: string, image: string, description: string }} IgdbResult */
 
   let {
@@ -68,7 +68,7 @@
   $effect(() => {
     if (!open || !game || game.path === lastGamePath) return;
     lastGamePath = game.path;
-    query = game.name ?? "";
+    query = game.original_name || game.name || "";
     results = [];
     search();
   });
@@ -76,16 +76,16 @@
 
 <Dialog.Root open={open} onOpenChange={(value) => !value && onClose()}>
   <Dialog.Portal>
-    <Dialog.Overlay class="overlay" />
-    <Dialog.Content class="content">
+    <Dialog.Overlay class="metadata-overlay" />
+    <Dialog.Content class="metadata-content">
       <div class="header">
         <div>
-          <Dialog.Title class="title">Find metadata</Dialog.Title>
-          <Dialog.Description class="description">
+          <Dialog.Title class="metadata-title">Find metadata</Dialog.Title>
+          <Dialog.Description class="metadata-description">
             Search IGDB and choose the correct game title.
           </Dialog.Description>
         </div>
-        <Dialog.Close class="close" aria-label="Close">×</Dialog.Close>
+        <Dialog.Close class="metadata-close" aria-label="Close">×</Dialog.Close>
       </div>
 
       <form
@@ -127,50 +127,61 @@
 </Dialog.Root>
 
 <style>
-  .overlay {
+  :global(.metadata-overlay) {
     position: fixed;
     inset: 0;
-    z-index: 50;
+    z-index: 1000;
     background: rgba(0, 0, 0, 0.62);
   }
 
-  .content {
+  :global(.metadata-content) {
+    box-sizing: border-box;
     position: fixed;
-    z-index: 51;
-    top: 50%;
-    left: 50%;
-    width: min(720px, calc(100vw - 28px));
-    max-height: min(720px, calc(100dvh - 28px));
-    transform: translate(-50%, -50%);
+    z-index: 1001;
+    inset: 0;
+    min-width: 100vw;
+    min-height: 100vh;
+    width: 100vw;
+    height: 100dvh;
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr);
-    gap: 14px;
-    padding: 16px;
-    border: 1px solid #303030;
-    border-radius: 16px;
+    gap: 16px;
+    padding: 24px clamp(24px, 8vw, 120px);
+    border: 0;
+    border-radius: 0;
     background: #181818;
     color: #eee;
-    box-shadow: 0 22px 70px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
   }
 
   .header {
     display: flex;
     justify-content: space-between;
     gap: 16px;
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
   }
 
-  .title {
+  .search,
+  .results {
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  :global(.metadata-title) {
     margin: 0;
     font-size: 18px;
   }
 
-  .description {
+  :global(.metadata-description) {
     margin: 4px 0 0;
     color: #999;
     font-size: 13px;
   }
 
-  .close {
+  :global(.metadata-close) {
     width: 30px;
     height: 30px;
     border: 1px solid #303030;
@@ -228,6 +239,7 @@
   }
 
   .results {
+    min-height: 0;
     overflow: auto;
     display: grid;
     gap: 8px;

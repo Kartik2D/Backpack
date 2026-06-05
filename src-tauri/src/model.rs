@@ -7,10 +7,33 @@ use serde::{Deserialize, Serialize};
 pub struct App {
     pub path: String,
     pub name: String,
+    #[serde(default)]
+    pub original_name: String,
     pub image: String,
     pub description: String,
     #[serde(default)]
     pub install_dir: Option<String>,
+}
+
+impl App {
+    pub fn with_name(path: String, name: String, install_dir: Option<String>) -> Self {
+        Self {
+            path,
+            name: name.clone(),
+            original_name: name,
+            image: String::new(),
+            description: String::new(),
+            install_dir,
+        }
+    }
+
+    pub fn search_name(&self) -> &str {
+        if self.original_name.is_empty() {
+            &self.name
+        } else {
+            &self.original_name
+        }
+    }
 }
 
 #[derive(Default)]

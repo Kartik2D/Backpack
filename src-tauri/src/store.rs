@@ -11,10 +11,21 @@ fn apps_file(app: &tauri::AppHandle) -> Option<PathBuf> {
 }
 
 pub fn load_apps(app: &tauri::AppHandle) -> Vec<App> {
-    apps_file(app)
+    let mut apps: Vec<App> = apps_file(app)
         .and_then(|f| std::fs::read_to_string(f).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    for item in &mut apps {
+        if item.original_name.is_empty() {
+            let stem = platform::file_stem(&item.path);
+            item.original_name = if stem.is_empty() {
+                item.name.clone()
+            } else {
+                stem
+            };
+        }
+    }
+    apps
 }
 
 pub fn save_apps(app: &tauri::AppHandle, list: &[App]) {

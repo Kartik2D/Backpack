@@ -68,12 +68,12 @@ pub fn scan_gamepass() -> Vec<App> {
             let is_framework = package.IsFramework().unwrap_or(false);
             if !is_framework && is_game_package(&package) {
                 let install_dir = package_install_dir(&package).map(|path| path_string(&path));
-                out.extend(app_entries(&package).into_iter().map(|(name, aumid)| App {
-                    name,
-                    path: format!("shell:AppsFolder\\{aumid}"),
-                    image: String::new(),
-                    description: String::new(),
-                    install_dir: install_dir.clone(),
+                out.extend(app_entries(&package).into_iter().map(|(name, aumid)| {
+                    App::with_name(
+                        format!("shell:AppsFolder\\{aumid}"),
+                        name,
+                        install_dir.clone(),
+                    )
                 }));
             }
         }

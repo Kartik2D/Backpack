@@ -179,13 +179,11 @@ pub fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
             continue;
         }
         seen.insert(key);
-        additions.push(App {
-            name: platform::file_stem(&path),
-            path: canonical_path,
-            image: String::new(),
-            description: String::new(),
-            install_dir: install_dir_for_local_path(&path),
-        });
+        additions.push(App::with_name(
+            canonical_path,
+            platform::file_stem(&path),
+            install_dir_for_local_path(&path),
+        ));
     }
 
     let cache = app.state::<MetadataCache>();
@@ -215,12 +213,12 @@ pub fn launch(path: String, window: tauri::WebviewWindow, app: tauri::AppHandle)
                     })
                     .cloned()
             };
-            found.unwrap_or_else(|| App {
-                name: platform::file_stem(&path),
-                path: path.clone(),
-                image: String::new(),
-                description: String::new(),
-                install_dir: install_dir_for_local_path(&path),
+            found.unwrap_or_else(|| {
+                App::with_name(
+                    path.clone(),
+                    platform::file_stem(&path),
+                    install_dir_for_local_path(&path),
+                )
             })
         };
         let target = TrackTarget::from_app(&game, &path);

@@ -171,13 +171,11 @@ fn scan_steam() -> Vec<App> {
                 .into_iter()
                 .next()
                 .map(|dir| path_string(&steamapps.join("common").join(dir)));
-            games.push(App {
-                path: format!("steam://rungameid/{appid}"),
+            games.push(App::with_name(
+                format!("steam://rungameid/{appid}"),
                 name,
-                image: String::new(),
-                description: String::new(),
                 install_dir,
-            });
+            ));
         }
     }
     games
@@ -238,15 +236,13 @@ fn scan_epic() -> Vec<Discovered> {
         let name = get("DisplayName");
         let install_dir = get("InstallLocation");
         out.push(Discovered {
-            app: App {
-                path: format!(
+            app: App::with_name(
+                format!(
                     "com.epicgames.launcher://apps/{namespace}%3A{item_id}%3A{app_name}?action=launch&silent=true"
                 ),
                 name,
-                image: String::new(),
-                description: String::new(),
-                install_dir: (!install_dir.is_empty()).then_some(install_dir),
-            },
+                (!install_dir.is_empty()).then_some(install_dir),
+            ),
         });
     }
     out
@@ -314,13 +310,7 @@ fn collect_app_bundles(dir: &Path, depth: u32, budget: &mut u32, out: &mut Vec<P
 fn app_to_discovered(path: PathBuf) -> Discovered {
     let name = app_bundle_name(&path);
     Discovered {
-        app: App {
-            path: path_string(&path),
-            name,
-            image: String::new(),
-            description: String::new(),
-            install_dir: Some(path_string(&path)),
-        },
+        app: App::with_name(path_string(&path), name, Some(path_string(&path))),
     }
 }
 

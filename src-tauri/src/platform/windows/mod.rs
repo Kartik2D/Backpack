@@ -8,9 +8,11 @@ mod appx;
 mod launch;
 mod registry;
 mod scan;
+mod steam;
 
 pub use launch::{is_trackable, launch_detached, local_path_exists, wait_for_app};
 pub use scan::discover_games;
+pub use steam::normalize_launch_path;
 
 struct InstallIndex {
     steam_appids: HashSet<String>,

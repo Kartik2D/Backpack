@@ -14,10 +14,10 @@
   </div>
 
   <nav aria-label="Library actions">
-    <button onclick={onScan} disabled={scanning || fetchingMetadata}>
+    <button onclick={() => onScan()} disabled={scanning || fetchingMetadata}>
       {scanning ? "Scanning…" : "Scan for games"}
     </button>
-    <button onclick={onGetMetadata} disabled={scanning || fetchingMetadata}>
+    <button onclick={() => onGetMetadata()} disabled={scanning || fetchingMetadata}>
       {fetchingMetadata ? "Fetching…" : "Get metadata"}
     </button>
   </nav>

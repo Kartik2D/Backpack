@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::Path;
 
 use tauri::Manager;
 
@@ -6,7 +7,7 @@ use crate::metadata::{apply_metadata_to_app, enrich_new, refresh_all, search_igd
 use crate::model::{App, AppList, AppMetadata, IgdbSearchResult, MetadataCache};
 use crate::platform;
 use crate::store::{dedupe_apps, local_path_exists, normalize_path_key, save_apps};
-use crate::window::show_window;
+use crate::track::{self, GameState, GameStates, TrackTarget};
 
 // Discover installed games across all supported launchers, drop entries the user
 // uninstalled outside Backpack, dedupe, merge new finds, persist, and return.
@@ -89,6 +90,26 @@ fn apply_selected_metadata(
     result
 }
 
+fn install_dir_for_local_path(path: &str) -> Option<String> {
+    let lower = path.to_lowercase();
+    if lower.contains("://") || lower.starts_with("shell:") {
+        return None;
+    }
+
+    let path = Path::new(path);
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("app"))
+        .unwrap_or(false)
+    {
+        return Some(path.to_string_lossy().into_owned());
+    }
+
+    path.parent()
+        .map(|parent| parent.to_string_lossy().into_owned())
+}
+
 #[tauri::command]
 pub async fn scan_games(app: tauri::AppHandle) -> Vec<App> {
     // Scanning touches launchers, registries and the filesystem; keep it off the
@@ -118,6 +139,11 @@ pub fn get_apps(list: tauri::State<AppList>) -> Vec<App> {
 }
 
 #[tauri::command]
+pub fn get_game_states(states: tauri::State<GameStates>) -> Vec<GameState> {
+    track::snapshot(&states)
+}
+
+#[tauri::command]
 pub fn remove_app(path: String, app: tauri::AppHandle) -> Vec<App> {
     remove_app_from_list(&path, &app)
 }
@@ -139,21 +165,26 @@ pub fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
     let existing = state.0.lock().unwrap().clone();
     let mut seen: HashSet<String> = existing
         .iter()
-        .map(|a| normalize_path_key(&a.path))
+        .map(|a| normalize_path_key(&platform::normalize_launch_path(&a.path)))
         .collect();
     let mut additions = Vec::new();
 
     for path in paths {
-        let key = normalize_path_key(&path);
-        if seen.contains(&key) || !local_path_exists(&path) {
+        if !local_path_exists(&path) {
+            continue;
+        }
+        let canonical_path = platform::normalize_launch_path(&path);
+        let key = normalize_path_key(&canonical_path);
+        if seen.contains(&key) {
             continue;
         }
         seen.insert(key);
         additions.push(App {
             name: platform::file_stem(&path),
-            path,
+            path: canonical_path,
             image: String::new(),
             description: String::new(),
+            install_dir: install_dir_for_local_path(&path),
         });
     }
 
@@ -171,19 +202,31 @@ pub fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Vec<App> {
 #[tauri::command]
 pub fn launch(path: String, window: tauri::WebviewWindow, app: tauri::AppHandle) {
     std::thread::spawn(move || {
-        // Protocol and packaged launches hand off to a launcher process, so we
-        // can't wait for the game itself to exit.
-        if !platform::is_trackable(&path) {
-            platform::launch_detached(&path);
-            return;
-        }
+        let path = platform::normalize_launch_path(&path);
+        let game = {
+            let key = normalize_path_key(&path);
+            let found = {
+                let state = app.state::<AppList>();
+                let list = state.0.lock().unwrap();
+                list.iter()
+                    .find(|item| {
+                        normalize_path_key(&platform::normalize_launch_path(&item.path)) == key
+                            || normalize_path_key(&item.path) == key
+                    })
+                    .cloned()
+            };
+            found.unwrap_or_else(|| App {
+                name: platform::file_stem(&path),
+                path: path.clone(),
+                image: String::new(),
+                description: String::new(),
+                install_dir: install_dir_for_local_path(&path),
+            })
+        };
+        let target = TrackTarget::from_app(&game, &path);
 
-        let win = window.clone();
-        let _ = app.run_on_main_thread(move || {
-            let _ = win.close();
-        });
-        platform::wait_for_app(&path);
-        let handle = app.clone();
-        let _ = app.run_on_main_thread(move || show_window(&handle));
+        track::emit_launching(&app, path.clone());
+        platform::launch_detached(&path);
+        track::spawn(app, window, path, target);
     });
 }

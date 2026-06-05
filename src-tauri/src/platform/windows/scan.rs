@@ -8,6 +8,10 @@ use super::appx;
 use super::registry;
 use crate::platform::{file_stem, folder_name, vdf_values};
 
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 pub fn installed_steam_appids() -> HashSet<String> {
     let mut steam_appids = HashSet::new();
     if let Some(steam) = registry::steam_path() {
@@ -83,11 +87,16 @@ fn scan_steam() -> Vec<App> {
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| format!("Steam app {appid}"));
+            let install_dir = vdf_values(&acf, "installdir")
+                .into_iter()
+                .next()
+                .map(|dir| path_string(&steamapps.join("common").join(dir)));
             games.push(App {
                 path: format!("steam://rungameid/{appid}"),
                 name,
                 image: String::new(),
                 description: String::new(),
+                install_dir,
             });
         }
     }
@@ -222,6 +231,7 @@ pub fn scan_epic() -> Vec<Discovered> {
             continue;
         }
         let name = get("DisplayName");
+        let install_dir = get("InstallLocation");
         out.push(Discovered {
             app: App {
                 path: format!(
@@ -230,6 +240,7 @@ pub fn scan_epic() -> Vec<Discovered> {
                 name,
                 image: String::new(),
                 description: String::new(),
+                install_dir: (!install_dir.is_empty()).then_some(install_dir),
             },
         });
     }
@@ -247,12 +258,14 @@ fn scan_gog() -> Vec<Discovered> {
             let name = (!item.name.is_empty())
                 .then_some(item.name)
                 .unwrap_or_else(|| file_stem(&item.exe));
+            let install_dir = Path::new(&item.exe).parent().map(path_string);
             Some(Discovered {
                 app: App {
                     path: item.exe,
                     name,
                     image: String::new(),
                     description: String::new(),
+                    install_dir,
                 },
             })
         })
@@ -269,6 +282,7 @@ fn scan_ubisoft() -> Vec<Discovered> {
                 name: folder_name(&item.dir),
                 image: String::new(),
                 description: String::new(),
+                install_dir: Some(item.dir),
             },
         })
         .collect()
@@ -293,6 +307,7 @@ fn scan_ea() -> Vec<Discovered> {
                     name,
                     image: String::new(),
                     description: String::new(),
+                    install_dir: Some(item.dir),
                 },
             })
         })
@@ -313,6 +328,7 @@ fn scan_blizzard() -> Vec<Discovered> {
                     name: item.name,
                     image: String::new(),
                     description: String::new(),
+                    install_dir: Some(item.dir),
                 },
             })
         })
@@ -344,6 +360,7 @@ fn scan_itch() -> Vec<Discovered> {
                 name: folder_name(&folder.to_string_lossy()),
                 image: String::new(),
                 description: String::new(),
+                install_dir: Some(path_string(&folder)),
             },
         });
     }
@@ -385,6 +402,7 @@ fn scan_amazon() -> Vec<Discovered> {
                 name: folder_name(&folder.to_string_lossy()),
                 image: String::new(),
                 description: String::new(),
+                install_dir: Some(path_string(&folder)),
             },
         });
     }
@@ -394,7 +412,11 @@ fn scan_amazon() -> Vec<Discovered> {
 pub fn discover_games() -> Vec<App> {
     let mut pending: Vec<Discovered> = Vec::new();
     pending.extend(scan_steam().into_iter().map(|app| Discovered { app }));
-    pending.extend(appx::scan_gamepass().into_iter().map(|app| Discovered { app }));
+    pending.extend(
+        appx::scan_gamepass()
+            .into_iter()
+            .map(|app| Discovered { app }),
+    );
     pending.extend(scan_epic());
     pending.extend(scan_gog());
     pending.extend(scan_ubisoft());

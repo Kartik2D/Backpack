@@ -9,6 +9,8 @@ pub struct App {
     pub name: String,
     pub image: String,
     pub description: String,
+    #[serde(default)]
+    pub install_dir: Option<String>,
 }
 
 #[derive(Default)]

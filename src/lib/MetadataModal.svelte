@@ -3,6 +3,9 @@
   import { invoke } from "@tauri-apps/api/core";
   import { toasts } from "$lib/toast.svelte.ts";
 
+  /** @typedef {{ path: string, name: string }} GameApp */
+  /** @typedef {{ name: string, image: string, description: string }} IgdbResult */
+
   let {
     open = false,
     game = null,
@@ -11,6 +14,7 @@
   } = $props();
 
   let query = $state("");
+  /** @type {IgdbResult[]} */
   let results = $state([]);
   let searching = $state(false);
   let applying = $state(false);
@@ -36,6 +40,7 @@
     }
   }
 
+  /** @param {IgdbResult} result */
   async function apply(result) {
     if (!game || applying) return;
 

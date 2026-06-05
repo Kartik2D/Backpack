@@ -4,8 +4,8 @@ use std::process::Command;
 use windows::core::{Interface, PCWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, MAX_PATH};
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-    IPersistFile, STGM_READ,
+    CoCreateInstance, CoInitializeEx, IPersistFile, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+    STGM_READ,
 };
 use windows::Win32::System::Threading::{WaitForSingleObject, INFINITE};
 use windows::Win32::UI::Shell::{
@@ -14,11 +14,13 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
+use super::steam;
+
 #[derive(Default)]
-struct LinkTarget {
-    target: String,
-    arguments: String,
-    working_dir: String,
+pub(super) struct LinkTarget {
+    pub target: String,
+    pub arguments: String,
+    pub working_dir: String,
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -38,7 +40,7 @@ fn init_com() {
     }
 }
 
-fn resolve_lnk(path: &str) -> Option<LinkTarget> {
+pub(super) fn resolve_lnk(path: &str) -> Option<LinkTarget> {
     init_com();
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).ok()?;
@@ -71,7 +73,12 @@ pub fn resolve_lnk_target(path: &str) -> Option<String> {
     resolve_lnk(path).map(|target| target.target)
 }
 
-fn shell_execute(path: &str, parameters: Option<&str>, directory: Option<&str>, wait: bool) -> bool {
+fn shell_execute(
+    path: &str,
+    parameters: Option<&str>,
+    directory: Option<&str>,
+    wait: bool,
+) -> bool {
     let path_w = wide(path);
     let params_w = parameters.filter(|s| !s.is_empty()).map(wide);
     let dir_w = directory.filter(|s| !s.is_empty()).map(wide);
@@ -143,6 +150,12 @@ pub fn wait_for_app(path: &str) {
 }
 
 pub fn launch_detached(path: &str) {
+    if let Some(appid) = steam::appid_from_uri(path) {
+        if steam::launch_appid(&appid) {
+            return;
+        }
+    }
+
     // Packaged apps (shell:AppsFolder\<AUMID>) activate most reliably through
     // explorer.exe; protocols and regular files go through ShellExecute.
     if path.to_lowercase().starts_with("shell:") {

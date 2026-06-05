@@ -32,4 +32,8 @@ pub fn launch_detached(path: &str) {
     let _ = Command::new(path).spawn();
 }
 
+pub fn normalize_launch_path(path: &str) -> String {
+    path.to_string()
+}
+
 pub fn handle_run_event(_app: &tauri::AppHandle, _event: &tauri::RunEvent) {}

@@ -2,21 +2,86 @@
   import { onMount } from "svelte";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
   import { ContextMenu } from "bits-ui";
   import MetadataModal from "$lib/MetadataModal.svelte";
   import Toast from "$lib/Toast.svelte";
   import Toolbar from "$lib/Toolbar.svelte";
   import { toasts } from "$lib/toast.svelte.ts";
 
+  /** @typedef {{ path: string, name: string, image: string, description: string, install_dir?: string | null }} GameApp */
+  /** @typedef {{ path: string, state: "launching" | "playing" | "stopped", session_secs?: number | null }} GameStateEvent */
+
   const GAP = 10;
+  /** @type {GameApp[]} */
   let apps = $state([]);
+  /** @type {HTMLElement | undefined} */
   let box = $state();
   let cols = $state(1);
   let size = $state(0);
   let scanning = $state(false);
   let fetchingMetadata = $state(false);
   let metadataOpen = $state(false);
+  /** @type {GameApp | null} */
   let metadataGame = $state(null);
+  /** @type {Record<string, string>} */
+  let gameStates = $state({});
+  /** @type {Map<string, any>} */
+  const launchToasts = new Map();
+
+  /** @param {string} path */
+  function appName(path) {
+    return apps.find((app) => app.path === path)?.name ?? "Game";
+  }
+
+  /** @param {string} path @param {string} state */
+  function setGameState(path, state) {
+    gameStates = { ...gameStates, [path]: state };
+  }
+
+  /** @param {string} path */
+  function clearGameState(path) {
+    const next = { ...gameStates };
+    delete next[path];
+    gameStates = next;
+  }
+
+  /** @param {string} path */
+  function dismissLaunchToast(path) {
+    const toastId = launchToasts.get(path);
+    if (toastId) {
+      toasts.dismiss(toastId);
+      launchToasts.delete(path);
+    }
+  }
+
+  /** @param {GameStateEvent} payload */
+  function handleGameState(payload) {
+    const { path, state, session_secs: sessionSecs } = payload;
+    const name = appName(path);
+
+    if (state === "launching") {
+      dismissLaunchToast(path);
+      launchToasts.set(path, toasts.loading(`Launching ${name}…`));
+      setGameState(path, "launching");
+      return;
+    }
+
+    if (state === "playing") {
+      dismissLaunchToast(path);
+      setGameState(path, "playing");
+      toasts.success(`${name} is playing.`);
+      return;
+    }
+
+    if (state === "stopped") {
+      dismissLaunchToast(path);
+      clearGameState(path);
+      if ((sessionSecs ?? 0) > 0) {
+        toasts.success(`${name} closed.`);
+      }
+    }
+  }
 
   async function scan() {
     if (scanning) return;
@@ -50,6 +115,7 @@
     }
   }
 
+  /** @param {string[]} paths */
   async function addApps(paths) {
     const toastId = toasts.loading("Adding games…");
     try {
@@ -63,6 +129,7 @@
     }
   }
 
+  /** @param {GameApp} app */
   async function removeApp(app) {
     const toastId = toasts.loading("Removing from list…");
     try {
@@ -76,24 +143,35 @@
     }
   }
 
+  /** @param {GameApp} app */
   async function launchApp(app) {
-    // Launch is fire-and-forget on the backend (it spawns a thread and returns
-    // immediately), so show a self-dismissing toast: launching can take a few
-    // seconds while the OS resolves shortcuts and spins up the game/launcher.
-    const toastId = toasts.loading(`Launching ${app.name}…`);
-    window.setTimeout(() => toasts.dismiss(toastId), 6000);
     try {
       await invoke("launch", { path: app.path });
     } catch (error) {
       console.error(error);
-      toasts.dismiss(toastId);
+      dismissLaunchToast(app.path);
       toasts.error(`Failed to launch ${app.name}.`);
     }
   }
 
+  /** @param {GameApp} app */
   function openMetadata(app) {
     metadataGame = app;
     metadataOpen = true;
+  }
+
+  /** @param {GameApp[]} updatedApps */
+  function applyUpdatedApps(updatedApps) {
+    apps = updatedApps;
+  }
+
+  /** @param {GameStateEvent[]} states */
+  function applyGameStateSnapshot(states) {
+    gameStates = Object.fromEntries(
+      states
+        .filter(({ state }) => state !== "stopped")
+        .map(({ path, state }) => [path, state]),
+    );
   }
 
   // Pick the column count that yields the largest possible square for N items.
@@ -123,6 +201,9 @@
     invoke("get_apps").then((a) => {
       apps = a;
     });
+    invoke("get_game_states").then((states) => {
+      applyGameStateSnapshot(/** @type {GameStateEvent[]} */ (states));
+    });
     const ro = new ResizeObserver(layout);
     if (box) ro.observe(box);
     const un = getCurrentWebview().onDragDropEvent((e) => {
@@ -130,9 +211,13 @@
         addApps(e.payload.paths);
       }
     });
+    const unlistenGameState = listen("game-state", (event) => {
+      handleGameState(event.payload);
+    });
     return () => {
       ro.disconnect();
       un.then((f) => f());
+      unlistenGameState.then((f) => f());
     };
   });
 </script>
@@ -161,6 +246,9 @@
             {#if app.image}
               <img src={app.image} alt="" />
             {/if}
+            {#if gameStates[app.path]}
+              <strong class="status">{gameStates[app.path]}</strong>
+            {/if}
             <span>{app.name}</span>
           </button>
         </ContextMenu.Trigger>
@@ -188,7 +276,7 @@
   open={metadataOpen}
   game={metadataGame}
   onClose={() => (metadataOpen = false)}
-  onApplied={(updatedApps) => (apps = updatedApps)}
+  onApplied={applyUpdatedApps}
 />
 <Toast />
 
@@ -273,6 +361,20 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .status {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 7px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.72);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    text-transform: capitalize;
   }
 
   .hint {

@@ -12,6 +12,10 @@ fn package_install_dir(package: &windows::ApplicationModel::Package) -> Option<P
     std::fs::canonicalize(&path).ok().or(Some(path))
 }
 
+fn path_string(path: &PathBuf) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 fn is_game_package(package: &windows::ApplicationModel::Package) -> bool {
     package_install_dir(package)
         .map(|dir| dir.join("MicrosoftGame.config").exists())
@@ -63,11 +67,13 @@ pub fn scan_gamepass() -> Vec<App> {
         if let Ok(package) = iterator.Current() {
             let is_framework = package.IsFramework().unwrap_or(false);
             if !is_framework && is_game_package(&package) {
+                let install_dir = package_install_dir(&package).map(|path| path_string(&path));
                 out.extend(app_entries(&package).into_iter().map(|(name, aumid)| App {
                     name,
                     path: format!("shell:AppsFolder\\{aumid}"),
                     image: String::new(),
                     description: String::new(),
+                    install_dir: install_dir.clone(),
                 }));
             }
         }

@@ -8,6 +8,10 @@ use crate::window::show_window;
 
 use super::{folder_name, vdf_values};
 
+fn path_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
 struct InstallIndex {
     steam_appids: HashSet<String>,
     epic_paths: HashSet<String>,
@@ -96,6 +100,10 @@ pub fn is_trackable(path: &str) -> bool {
     !path.to_lowercase().contains("://")
 }
 
+pub fn normalize_launch_path(path: &str) -> String {
+    path.to_string()
+}
+
 pub fn handle_run_event(app: &tauri::AppHandle, event: &tauri::RunEvent) {
     if let tauri::RunEvent::Reopen { .. } = event {
         show_window(app);
@@ -159,11 +167,16 @@ fn scan_steam() -> Vec<App> {
                 .into_iter()
                 .next()
                 .unwrap_or_else(|| format!("Steam app {appid}"));
+            let install_dir = vdf_values(&acf, "installdir")
+                .into_iter()
+                .next()
+                .map(|dir| path_string(&steamapps.join("common").join(dir)));
             games.push(App {
                 path: format!("steam://rungameid/{appid}"),
                 name,
                 image: String::new(),
                 description: String::new(),
+                install_dir,
             });
         }
     }
@@ -223,6 +236,7 @@ fn scan_epic() -> Vec<Discovered> {
             continue;
         }
         let name = get("DisplayName");
+        let install_dir = get("InstallLocation");
         out.push(Discovered {
             app: App {
                 path: format!(
@@ -231,6 +245,7 @@ fn scan_epic() -> Vec<Discovered> {
                 name,
                 image: String::new(),
                 description: String::new(),
+                install_dir: (!install_dir.is_empty()).then_some(install_dir),
             },
         });
     }
@@ -300,10 +315,11 @@ fn app_to_discovered(path: PathBuf) -> Discovered {
     let name = app_bundle_name(&path);
     Discovered {
         app: App {
-            path: path.to_string_lossy().into_owned(),
+            path: path_string(&path),
             name,
             image: String::new(),
             description: String::new(),
+            install_dir: Some(path_string(&path)),
         },
     }
 }

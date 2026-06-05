@@ -3,6 +3,7 @@ mod metadata;
 mod model;
 mod platform;
 mod store;
+mod track;
 mod window;
 
 use tauri::{
@@ -12,11 +13,13 @@ use tauri::{
 };
 
 use crate::commands::{
-    add_apps, apply_metadata, get_apps, get_metadata, igdb_search, launch, remove_app, scan_games,
+    add_apps, apply_metadata, get_apps, get_game_states, get_metadata, igdb_search, launch,
+    remove_app, scan_games,
 };
 use crate::model::{AppList, MetadataCache};
 use crate::store::load_apps;
-use crate::window::show_window;
+use crate::track::GameStates;
+use crate::window::{ensure_main_window, hide_on_close, show_window};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -24,8 +27,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(AppList::default())
         .manage(MetadataCache::default())
+        .manage(GameStates::default())
         .invoke_handler(tauri::generate_handler![
             get_apps,
+            get_game_states,
             add_apps,
             launch,
             scan_games,
@@ -36,6 +41,8 @@ pub fn run() {
         ])
         .setup(|app| {
             *app.state::<AppList>().0.lock().unwrap() = load_apps(app.handle());
+            let main_window = ensure_main_window(app.handle())?;
+            hide_on_close(&main_window);
 
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

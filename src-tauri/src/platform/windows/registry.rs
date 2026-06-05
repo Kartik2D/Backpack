@@ -198,7 +198,10 @@ pub fn ea_installs() -> Vec<EaInstall> {
 
 pub fn blizzard_installs() -> Vec<BlizzardInstall> {
     [
-        ("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall", false),
+        (
+            "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            false,
+        ),
         (
             "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
             true,

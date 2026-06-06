@@ -334,7 +334,7 @@
           <button
             class="card"
             class:selected={app.path === selectedPath}
-            title={app.description}
+            title={app.name}
             onclick={() => (selectedPath = app.path)}
             ondblclick={() => launchApp(app)}
           >
@@ -344,7 +344,6 @@
             {#if gameStates[app.path]}
               <strong class="status">{gameStates[app.path]}</strong>
             {/if}
-            <span>{app.name}</span>
           </button>
         </ContextMenu.Trigger>
         <ContextMenu.Portal>
@@ -476,19 +475,6 @@
     height: 100%;
     object-fit: cover;
     display: block;
-  }
-
-  .card span {
-    position: absolute;
-    inset: auto 0 0 0;
-    padding: 8px 10px;
-    text-align: left;
-    font-size: 13px;
-    line-height: 1.2;
-    background: linear-gradient(transparent, rgba(0, 0, 0, 0.85));
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .status {

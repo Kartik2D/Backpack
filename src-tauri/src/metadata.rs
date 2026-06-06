@@ -100,6 +100,22 @@ struct IgdbGame {
     screenshots: Option<Vec<IgdbScreenshot>>,
 }
 
+// Credentials baked in at compile time by build.rs from a gitignored .env.
+// These let release builds work without anything set in the runtime environment.
+const BAKED_CLIENT_ID: Option<&str> = option_env!("IGDB_CLIENT_ID");
+const BAKED_CLIENT_SECRET: Option<&str> = option_env!("IGDB_CLIENT_SECRET");
+const BAKED_ACCESS_TOKEN: Option<&str> = option_env!("IGDB_ACCESS_TOKEN");
+
+// Prefer a value from the runtime environment (handy for local dev), then fall
+// back to the credential baked into the binary at compile time.
+fn resolve_credential(primary: &str, fallback: &str, baked: Option<&str>) -> Option<String> {
+    std::env::var(primary)
+        .or_else(|_| std::env::var(fallback))
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| baked.map(str::to_string).filter(|value| !value.is_empty()))
+}
+
 struct IgdbClient {
     client_id: String,
     access_token: String,
@@ -109,18 +125,14 @@ struct IgdbClient {
 
 impl IgdbClient {
     fn from_env() -> MetadataResult<Self> {
-        let client_id = std::env::var("IGDB_CLIENT_ID")
-            .or_else(|_| std::env::var("TWITCH_CLIENT_ID"))
-            .map_err(|_| "IGDB_CLIENT_ID or TWITCH_CLIENT_ID is not set.".to_string())?;
+        let client_id = resolve_credential("IGDB_CLIENT_ID", "TWITCH_CLIENT_ID", BAKED_CLIENT_ID)
+            .ok_or_else(|| "IGDB_CLIENT_ID or TWITCH_CLIENT_ID is not set.".to_string())?;
         let http = reqwest::blocking::Client::new();
-        let access_token = std::env::var("IGDB_ACCESS_TOKEN")
-            .or_else(|_| std::env::var("TWITCH_ACCESS_TOKEN"))
-            .ok()
+        let access_token = resolve_credential("IGDB_ACCESS_TOKEN", "TWITCH_ACCESS_TOKEN", BAKED_ACCESS_TOKEN)
             .map(Ok)
             .unwrap_or_else(|| {
-                let client_secret = std::env::var("IGDB_CLIENT_SECRET")
-                    .or_else(|_| std::env::var("TWITCH_CLIENT_SECRET"))
-                    .map_err(|_| {
+                let client_secret = resolve_credential("IGDB_CLIENT_SECRET", "TWITCH_CLIENT_SECRET", BAKED_CLIENT_SECRET)
+                    .ok_or_else(|| {
                         "Set IGDB_ACCESS_TOKEN, or set IGDB_CLIENT_SECRET/TWITCH_CLIENT_SECRET so Backpack can request one.".to_string()
                     })?;
                 let response = http

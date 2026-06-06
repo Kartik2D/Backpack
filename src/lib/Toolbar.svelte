@@ -18,7 +18,7 @@
       {scanning ? "Scanning…" : "Scan for games"}
     </button>
     <button onclick={() => onGetMetadata()} disabled={scanning || fetchingMetadata}>
-      {fetchingMetadata ? "Fetching…" : "Get metadata"}
+      {fetchingMetadata ? "Refreshing…" : "Refresh all metadata"}
     </button>
   </nav>
 </header>

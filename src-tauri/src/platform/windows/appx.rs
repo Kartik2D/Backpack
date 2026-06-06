@@ -1,6 +1,7 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use windows::core::HSTRING;
 use windows::Management::Deployment::PackageManager;
 
 use crate::model::App;
@@ -12,7 +13,7 @@ fn package_install_dir(package: &windows::ApplicationModel::Package) -> Option<P
     std::fs::canonicalize(&path).ok().or(Some(path))
 }
 
-fn path_string(path: &PathBuf) -> String {
+fn path_string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
@@ -50,11 +51,14 @@ fn app_entries(package: &windows::ApplicationModel::Package) -> Vec<(String, Str
         .collect()
 }
 
-pub fn scan_gamepass() -> Vec<App> {
+fn package_entries() -> Vec<App> {
     let Ok(manager) = PackageManager::new() else {
         return Vec::new();
     };
-    let Ok(packages) = manager.FindPackages() else {
+    let packages = manager
+        .FindPackagesByUserSecurityId(&HSTRING::from(""))
+        .or_else(|_| manager.FindPackages());
+    let Ok(packages) = packages else {
         return Vec::new();
     };
 
@@ -85,8 +89,12 @@ pub fn scan_gamepass() -> Vec<App> {
     out
 }
 
+pub fn scan_gamepass() -> Vec<App> {
+    package_entries()
+}
+
 pub fn installed_aumids() -> HashSet<String> {
-    scan_gamepass()
+    package_entries()
         .into_iter()
         .map(|app| normalize_path_key(&app.path))
         .collect()

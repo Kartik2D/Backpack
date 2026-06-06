@@ -19,6 +19,11 @@
   let applying = $state(false);
   let lastGamePath = $state("");
 
+  /** @param {unknown} error */
+  function errorMessage(error) {
+    return typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  }
+
   async function search() {
     const trimmed = query.trim();
     if (!trimmed || searching) return;
@@ -32,7 +37,7 @@
       }
     } catch (error) {
       console.error(error);
-      toasts.error("Failed to search IGDB.");
+      toasts.error(`Failed to search IGDB: ${errorMessage(error)}`);
     } finally {
       searching = false;
       toasts.dismiss(toastId);
@@ -90,7 +95,7 @@
 
 {#if open}
   <div class="metadata-root" role="presentation">
-    <button class="overlay" type="button" aria-label="Close" onclick={onClose}></button>
+    <button class="overlay" type="button" aria-label="Close" onclick={() => onClose()}></button>
     <div
       class="content"
       role="dialog"
@@ -105,7 +110,7 @@
             Search IGDB and choose the correct game title.
           </p>
         </div>
-        <button class="close" type="button" aria-label="Close" onclick={onClose}>×</button>
+        <button class="close" type="button" aria-label="Close" onclick={() => onClose()}>×</button>
       </div>
 
       <form

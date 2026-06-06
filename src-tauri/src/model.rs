@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
@@ -45,9 +44,6 @@ pub struct AppMetadata {
     pub image: Option<String>,
     pub description: Option<String>,
 }
-
-#[derive(Default)]
-pub struct MetadataCache(pub Mutex<HashMap<String, AppMetadata>>);
 
 #[derive(Clone, Serialize)]
 pub struct IgdbSearchResult {

@@ -16,7 +16,7 @@ use crate::commands::{
     add_apps, apply_metadata, get_apps, get_game_states, get_metadata, igdb_search, launch,
     remove_app, scan_games,
 };
-use crate::model::{AppList, MetadataCache};
+use crate::model::AppList;
 use crate::store::load_apps;
 use crate::track::GameStates;
 use crate::window::{ensure_main_window, hide_on_close, show_window};
@@ -26,7 +26,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppList::default())
-        .manage(MetadataCache::default())
         .manage(GameStates::default())
         .invoke_handler(tauri::generate_handler![
             get_apps,

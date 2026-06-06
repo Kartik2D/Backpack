@@ -11,6 +11,7 @@
 
   /** @typedef {{ path: string, name: string, original_name?: string, image: string, description: string, install_dir?: string | null }} GameApp */
   /** @typedef {{ path: string, state: "launching" | "playing" | "stopped", session_secs?: number | null }} GameStateEvent */
+  /** @typedef {{ apps: GameApp[], added: number, requests: number, items: number }} ScanReport */
 
   const GAP = 10;
   // IGDB t_cover_small is 90 x 120 px (3:4 portrait).
@@ -31,6 +32,11 @@
   let gameStates = $state({});
   /** @type {Map<string, any>} */
   const launchToasts = new Map();
+
+  /** @param {unknown} error */
+  function errorMessage(error) {
+    return typeof error === "string" ? error : error instanceof Error ? error.message : String(error);
+  }
 
   /** @param {string} path */
   function appName(path) {
@@ -90,30 +96,50 @@
     if (scanning) return;
     const toastId = toasts.loading("Scanning for games…");
     scanning = true;
+    const unlisten = await listen("scan-progress", (event) => {
+      toasts.update(
+        toastId,
+        /** @type {{ message: string }} */ (event.payload).message,
+      );
+    });
     try {
-      apps = await invoke("scan_games");
-      toasts.success("Scan complete.");
+      const report = /** @type {ScanReport} */ (await invoke("scan_games"));
+      apps = report.apps;
+      toasts.success(
+        `Scan complete. ${report.added} games added · ${report.items} items downloaded · ${report.requests} IGDB requests.`,
+      );
     } catch (error) {
       console.error(error);
-      toasts.error("Scan failed.");
+      toasts.error(`Scan failed: ${errorMessage(error)}`);
     } finally {
       scanning = false;
+      unlisten();
       toasts.dismiss(toastId);
     }
   }
 
   async function getMetadata() {
     if (fetchingMetadata) return;
-    const toastId = toasts.loading("Fetching metadata…");
+    const toastId = toasts.loading("Refreshing metadata…");
     fetchingMetadata = true;
+    const unlisten = await listen("scan-progress", (event) => {
+      toasts.update(
+        toastId,
+        /** @type {{ message: string }} */ (event.payload).message,
+      );
+    });
     try {
-      apps = await invoke("get_metadata");
-      toasts.success("Metadata updated.");
+      const report = /** @type {ScanReport} */ (await invoke("get_metadata"));
+      apps = report.apps;
+      toasts.success(
+        `Metadata updated. ${report.items} items downloaded · ${report.requests} IGDB requests.`,
+      );
     } catch (error) {
       console.error(error);
-      toasts.error("Metadata update failed.");
+      toasts.error(`Metadata update failed: ${errorMessage(error)}`);
     } finally {
       fetchingMetadata = false;
+      unlisten();
       toasts.dismiss(toastId);
     }
   }
@@ -126,7 +152,7 @@
       toasts.success("Games added.");
     } catch (error) {
       console.error(error);
-      toasts.error("Failed to add games.");
+      toasts.error(`Failed to add games: ${errorMessage(error)}`);
     } finally {
       toasts.dismiss(toastId);
     }

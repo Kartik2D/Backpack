@@ -31,6 +31,11 @@ export const toasts = {
   loading(message: string) {
     return add("loading", message, 0);
   },
+  update(id: number, message: string, type: ToastType = "loading") {
+    toastState.items = toastState.items.map((toast) =>
+      toast.id === id ? { ...toast, message, type } : toast,
+    );
+  },
   success(message: string) {
     return add("success", message);
   },

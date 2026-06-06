@@ -9,17 +9,21 @@
   import Toolbar from "$lib/Toolbar.svelte";
   import { toasts } from "$lib/toast.svelte.ts";
 
-  /** @typedef {{ path: string, name: string, original_name?: string, image: string, description: string, install_dir?: string | null }} GameApp */
+  /** @typedef {{ path: string, name: string, original_name?: string, image: string, key_art?: string, description: string, install_dir?: string | null }} GameApp */
   /** @typedef {{ path: string, state: "launching" | "playing" | "stopped", session_secs?: number | null }} GameStateEvent */
   /** @typedef {{ apps: GameApp[], added: number, requests: number, items: number }} ScanReport */
 
   const GAP = 10;
   // IGDB t_cover_small is 90 x 120 px (3:4 portrait).
   const IGDB_COVER_HEIGHT_RATIO = 120 / 90;
+  const KEY_ART_MIN = 0.1;
+  const KEY_ART_MAX = 0.6;
   /** @type {GameApp[]} */
   let apps = $state([]);
   /** @type {HTMLElement | undefined} */
   let box = $state();
+  /** @type {HTMLElement | undefined} */
+  let shellEl = $state();
   let cols = $state(1);
   let cardWidth = $state(0);
   let cardHeight = $state(0);
@@ -32,6 +36,38 @@
   let gameStates = $state({});
   /** @type {Map<string, any>} */
   const launchToasts = new Map();
+
+  /** @type {string | null} */
+  let selectedPath = $state(null);
+  const selected = $derived(apps.find((app) => app.path === selectedPath) ?? null);
+  let keyArtFraction = $state(0.25);
+  let dragging = $state(false);
+
+  /** @param {number} value */
+  function clampFraction(value) {
+    return Math.min(KEY_ART_MAX, Math.max(KEY_ART_MIN, value));
+  }
+
+  /** @param {PointerEvent} event */
+  function startResize(event) {
+    if (event.target instanceof Element && event.target.closest("button")) return;
+    event.preventDefault();
+    dragging = true;
+
+    /** @param {PointerEvent} e */
+    const onMove = (e) => {
+      if (!shellEl) return;
+      const rect = shellEl.getBoundingClientRect();
+      keyArtFraction = clampFraction((e.clientY - rect.top) / rect.height);
+    };
+    const onUp = () => {
+      dragging = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  }
 
   /** @param {unknown} error */
   function errorMessage(error) {
@@ -259,12 +295,32 @@
   });
 </script>
 
-<div class="shell">
+<div
+  class="shell"
+  class:dragging
+  bind:this={shellEl}
+  style="grid-template-rows: {keyArtFraction}fr auto {1 - keyArtFraction}fr"
+>
+  <section class="keyart">
+    {#if selected}
+      {@const art = selected.key_art || selected.image}
+      {#if art}
+        <img class="art" src={art} alt="" />
+      {/if}
+    {:else}
+      <div class="art-empty">Select a game</div>
+    {/if}
+  </section>
+
   <Toolbar
     {scanning}
     {fetchingMetadata}
+    canPlay={!!selected}
+    selectedTitle={selected?.name ?? "Select a game"}
     onScan={scan}
     onGetMetadata={getMetadata}
+    onPlay={() => selected && launchApp(selected)}
+    onResizeStart={startResize}
   />
 
   <div
@@ -277,8 +333,10 @@
         <ContextMenu.Trigger class="card-wrap">
           <button
             class="card"
+            class:selected={app.path === selectedPath}
             title={app.description}
-            onclick={() => launchApp(app)}
+            onclick={() => (selectedPath = app.path)}
+            ondblclick={() => launchApp(app)}
           >
             {#if app.image}
               <img src={app.image} alt="" />
@@ -335,13 +393,40 @@
   .shell {
     width: 100vw;
     height: 100dvh;
-    display: flex;
-    flex-direction: column;
+    display: grid;
     overflow: hidden;
   }
 
+  .shell.dragging {
+    cursor: ns-resize;
+  }
+
+  .keyart {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    background: #0e0e0e;
+  }
+
+  .art {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    display: block;
+  }
+
+  .art-empty {
+    display: grid;
+    place-content: center;
+    height: 100%;
+    color: #555;
+    font-size: 14px;
+  }
+
   .grid {
-    flex: 1 1 auto;
     min-height: 0;
     width: 100vw;
     padding: var(--gap);
@@ -350,6 +435,7 @@
     gap: var(--gap);
     grid-template-columns: repeat(var(--cols), var(--card-width));
     grid-auto-rows: var(--card-height);
+    overflow: hidden;
   }
 
   .card-wrap {
@@ -379,6 +465,10 @@
   }
   .card:active {
     transform: scale(0.99);
+  }
+  .card.selected {
+    border-color: #3a78ef;
+    box-shadow: 0 0 0 2px rgba(58, 120, 239, 0.45);
   }
 
   .card img {

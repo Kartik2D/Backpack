@@ -114,6 +114,7 @@ fn apply_selected_metadata(
     path: &str,
     name: String,
     image: String,
+    key_art: String,
     description: String,
     app: &tauri::AppHandle,
 ) -> Vec<App> {
@@ -129,6 +130,7 @@ fn apply_selected_metadata(
             AppMetadata {
                 name: Some(name),
                 image: Some(image),
+                key_art: Some(key_art),
                 description: Some(description),
             },
         );
@@ -202,10 +204,11 @@ pub fn apply_metadata(
     path: String,
     name: String,
     image: String,
+    key_art: String,
     description: String,
     app: tauri::AppHandle,
 ) -> Vec<App> {
-    apply_selected_metadata(&path, name, image, description, &app)
+    apply_selected_metadata(&path, name, image, key_art, description, &app)
 }
 
 #[tauri::command]

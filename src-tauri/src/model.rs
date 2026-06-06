@@ -9,6 +9,8 @@ pub struct App {
     #[serde(default)]
     pub original_name: String,
     pub image: String,
+    #[serde(default)]
+    pub key_art: String,
     pub description: String,
     #[serde(default)]
     pub install_dir: Option<String>,
@@ -21,6 +23,7 @@ impl App {
             name: name.clone(),
             original_name: name,
             image: String::new(),
+            key_art: String::new(),
             description: String::new(),
             install_dir,
         }
@@ -42,6 +45,7 @@ pub struct AppList(pub Mutex<Vec<App>>);
 pub struct AppMetadata {
     pub name: Option<String>,
     pub image: Option<String>,
+    pub key_art: Option<String>,
     pub description: Option<String>,
 }
 
@@ -50,6 +54,7 @@ pub struct IgdbSearchResult {
     pub id: i64,
     pub name: String,
     pub image: String,
+    pub key_art: String,
     pub description: String,
 }
 

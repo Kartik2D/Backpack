@@ -23,8 +23,8 @@
 <style>
   .viewport {
     position: fixed;
+    top: 14px;
     right: 14px;
-    bottom: 14px;
     z-index: 100;
     display: grid;
     gap: 8px;

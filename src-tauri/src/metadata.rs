@@ -12,7 +12,7 @@ use crate::model::{App, AppMetadata, IgdbSearchResult};
 // Fields requested from IGDB. parent_game / version_parent come back as raw ids
 // because we do not expand them (no `.id` suffix), so plain i64 works.
 const IGDB_FIELDS: &str =
-    "name,total_rating_count,version_parent,parent_game,cover.image_id,summary";
+    "name,total_rating_count,version_parent,parent_game,cover.image_id,screenshots.image_id,summary";
 // game_type values we keep: 0 main game, 8 remake, 9 remaster, 10 expanded game,
 // 11 port. Everything else (dlc, expansion, bundle, season, pack, update, ...) is
 // excluded so DLC-heavy titles do not crowd out the base game.
@@ -69,6 +69,7 @@ fn count_fields(game: &IgdbGame) -> usize {
             .and_then(|cover| cover.image_id.as_deref())
             .filter(|s| !s.is_empty())
             .is_some() as usize
+        + first_screenshot_url(game).is_some() as usize
         + game.summary.as_deref().filter(|s| !s.is_empty()).is_some() as usize
 }
 
@@ -83,6 +84,11 @@ struct IgdbCover {
 }
 
 #[derive(Clone, Deserialize)]
+struct IgdbScreenshot {
+    image_id: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
 struct IgdbGame {
     id: Option<i64>,
     name: Option<String>,
@@ -91,6 +97,7 @@ struct IgdbGame {
     total_rating_count: Option<f64>,
     summary: Option<String>,
     cover: Option<IgdbCover>,
+    screenshots: Option<Vec<IgdbScreenshot>>,
 }
 
 struct IgdbClient {
@@ -349,30 +356,44 @@ fn parse_multiquery_value(value: Value) -> MetadataResult<Vec<(String, Vec<IgdbG
     Ok(out)
 }
 
-fn igdb_cover_url(image_id: &str, size: &str) -> String {
+fn igdb_image_url(image_id: &str, size: &str) -> String {
     format!("https://images.igdb.com/igdb/image/upload/t_{size}/{image_id}.jpg")
 }
 
+// First non-empty screenshot (landscape key art), built at 1080p.
+fn first_screenshot_url(game: &IgdbGame) -> Option<String> {
+    game.screenshots
+        .as_ref()?
+        .iter()
+        .find_map(|screenshot| screenshot.image_id.as_deref())
+        .filter(|id| !id.is_empty())
+        .map(|id| igdb_image_url(id, "1080p"))
+}
+
 fn game_to_result(game: IgdbGame) -> IgdbSearchResult {
+    let key_art = first_screenshot_url(&game).unwrap_or_default();
     IgdbSearchResult {
         id: game.id.unwrap_or_default(),
         name: game.name.unwrap_or_default(),
         image: game
             .cover
             .and_then(|cover| cover.image_id)
-            .map(|id| igdb_cover_url(&id, "cover_small"))
+            .map(|id| igdb_image_url(&id, "cover_small"))
             .unwrap_or_default(),
+        key_art,
         description: game.summary.unwrap_or_default(),
     }
 }
 
 fn game_to_metadata(game: IgdbGame) -> AppMetadata {
+    let key_art = first_screenshot_url(&game);
     AppMetadata {
         name: game.name.filter(|name| !name.is_empty()),
         image: game
             .cover
             .and_then(|cover| cover.image_id)
-            .map(|id| igdb_cover_url(&id, "cover_big")),
+            .map(|id| igdb_image_url(&id, "cover_big")),
+        key_art,
         description: game.summary.filter(|summary| !summary.is_empty()),
     }
 }
@@ -383,6 +404,9 @@ pub fn apply_metadata_to_app(app: &mut App, metadata: AppMetadata) {
     }
     if let Some(image) = metadata.image.filter(|s| !s.is_empty()) {
         app.image = image.replace("t_cover_small", "t_cover_big");
+    }
+    if let Some(key_art) = metadata.key_art.filter(|s| !s.is_empty()) {
+        app.key_art = key_art;
     }
     if let Some(description) = metadata.description.filter(|s| !s.is_empty()) {
         app.description = description;

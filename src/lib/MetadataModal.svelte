@@ -3,7 +3,7 @@
   import { toasts } from "$lib/toast.svelte.ts";
 
   /** @typedef {{ path: string, name: string, original_name?: string }} GameApp */
-  /** @typedef {{ name: string, image: string, description: string }} IgdbResult */
+  /** @typedef {{ name: string, image: string, key_art?: string, description: string }} IgdbResult */
 
   let {
     open = false,
@@ -55,6 +55,7 @@
         path: game.path,
         name: result.name,
         image: result.image,
+        keyArt: result.key_art ?? "",
         description: result.description,
       });
       onApplied(apps);

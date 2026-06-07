@@ -1,8 +1,9 @@
 <script>
+  import { Button, fade, zoom } from "$lib/ui/index.ts";
+
   let {
     open = false,
     title = "",
-    description = "",
     onClose = () => {},
     children,
   } = $props();
@@ -22,25 +23,22 @@
 
 {#if open}
   <div class="modal-root" role="presentation">
-    <button class="overlay" type="button" aria-label="Close" onclick={() => onClose()}></button>
+    <div class="backdrop" transition:fade></div>
     <div
       class="content"
       role="dialog"
       aria-modal="true"
       aria-labelledby="modal-title"
-      aria-describedby={description ? "modal-description" : undefined}
+      transition:zoom
     >
       <header class="header">
-        <div class="header-text">
-          <h2 id="modal-title" class="title">{title}</h2>
-          {#if description}
-            <p id="modal-description" class="description">{description}</p>
-          {/if}
-        </div>
-        <button class="close" type="button" aria-label="Close" onclick={() => onClose()}>×</button>
+        <Button class="back" variant="ghost" align="start" aria-label="Back" onclick={() => onClose()}>
+          Back
+        </Button>
+        <h2 id="modal-title" class="title">{title}</h2>
       </header>
 
-      <div class="body">
+      <div class="body scrollable">
         <div class="page">
           {@render children?.()}
         </div>
@@ -54,98 +52,64 @@
     position: fixed;
     inset: 0;
     z-index: 1000;
-    font-family: -apple-system, system-ui, sans-serif;
+    font: inherit;
   }
 
-  .overlay {
+  .backdrop {
     position: absolute;
     inset: 0;
-    border: 0;
-    padding: 0;
-    background: rgba(0, 0, 0, 0.62);
-    cursor: default;
+    background: var(--c-bg);
   }
 
   .content {
-    box-sizing: border-box;
     position: absolute;
     inset: 0;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
-    background: #161616;
-    color: #e0e0e0;
+    color: var(--c-text);
     overflow: hidden;
-    pointer-events: auto;
   }
 
   .header {
+    position: relative;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 52px;
-    padding: 0 12px;
-    border-bottom: 1px solid #383838;
-    background: #2a2a2a;
+    justify-content: center;
+    min-height: 10vmin;
+    padding: var(--space-2) var(--space-4);
+    background: var(--c-bg);
   }
 
-  .header-text {
-    min-width: 0;
+  .header :global(.back) {
+    position: absolute;
+    left: var(--space-4);
+    top: var(--space-2);
+    bottom: var(--space-2);
+  }
+
+  .title {
+    margin: 0;
+    max-width: 60%;
+    font-size: var(--font-md);
+    font-weight: 600;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .body {
     min-height: 0;
     overflow: auto;
-    padding: 20px clamp(20px, 6vw, 48px);
+    padding: var(--space-5) var(--space-6);
     display: flex;
     flex-direction: column;
     align-items: center;
   }
 
   .page {
-    width: min(100%, var(--modal-page-width, 640px));
-    min-height: 0;
-    flex: 1;
+    width: min(100%, var(--modal-page-width));
     display: flex;
     flex-direction: column;
-  }
-
-  .title {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 650;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .description {
-    margin: 2px 0 0;
-    color: #666;
-    font-size: 12px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .close {
-    flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    border: 1px solid #303030;
-    border-radius: 8px;
-    background: #222;
-    color: #e7e7e7;
-    cursor: pointer;
-    font: inherit;
-    font-size: 18px;
-    line-height: 1;
-    transition: border-color 0.12s, background 0.12s;
-  }
-
-  .close:hover {
-    border-color: #555;
-    background: #2a2a2a;
   }
 </style>

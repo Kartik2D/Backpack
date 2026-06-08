@@ -2,7 +2,7 @@
 
 ![Backpack](docs/screenshot.png)
 
-Backpack is a lightweight desktop game launcher built with [Tauri](https://tauri.app/) and [SvelteKit](https://kit.svelte.dev/). It scans your machine for installed games across stores (Steam, Epic, and Windows UWP/appx apps), pulls cover art, key art, and descriptions from [IGDB](https://www.igdb.com/), and presents everything in a single grid you can launch from. It lives in the system tray and tracks running games so you can jump back into your library at any time.
+Backpack is a lightweight desktop game launcher built with [Tauri](https://tauri.app/) and [Lit](https://lit.dev/). It scans your machine for installed games across stores (Steam, Epic, and Windows UWP/appx apps), pulls cover art, key art, and descriptions from [IGDB](https://www.igdb.com/), and presents everything in a single grid you can launch from. It lives in the system tray and tracks running games so you can jump back into your library at any time.
 
 ## Features
 

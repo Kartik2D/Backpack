@@ -1,0 +1,57 @@
+/*
+ * Scale is tuned for the smallest target screen (~144px on the short side, so
+ * 1vmin ~= 1.44px). Everything is sized in vmin so the same layout reads on a
+ * handheld and scales cleanly up to a TV.
+ */
+:root {
+  --space-1: 1vmin;
+  --space-2: 2vmin;
+  --space-3: 3vmin;
+  --space-4: 4.5vmin;
+  --space-5: 6vmin;
+  --space-6: 9vmin;
+
+  --font-sm: 4.5vmin;
+  --font-md: 5.5vmin;
+  --font-lg: 7.5vmin;
+
+  --radius-sm: 1.5vmin;
+  --radius-md: 2.5vmin;
+  --radius-pill: 100vmax;
+
+  --outline-focus: 1vmin solid #fff;
+  --outline-offset: var(--space-1);
+
+  --scrollbar-size: 1.5vmin;
+
+  --c-bg: #161616;
+  --c-surface: #1b1b1b;
+  --c-surface-2: #222;
+  --c-surface-3: #2a2a2a;
+  --c-text: #e7e7e7;
+  --c-text-dim: #888;
+  --c-text-muted: #666;
+  --c-accent: #3a78ef;
+  --c-accent-bg: #2d6cdf;
+  --c-success: #52c46b;
+  --c-danger: #e05b5b;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--c-bg);
+  color: var(--c-text);
+  font-family: -apple-system, system-ui, sans-serif;
+  font-size: var(--font-md);
+  -webkit-user-select: none;
+  user-select: none;
+}

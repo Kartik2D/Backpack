@@ -14,7 +14,7 @@ use tauri::{
 
 use crate::commands::{
     add_apps, apply_metadata, get_apps, get_game_states, get_metadata, igdb_search, launch,
-    remove_app, scan_games,
+    remove_app, scan_games, set_traffic_lights_inset,
 };
 use crate::model::AppList;
 use crate::store::load_apps;
@@ -25,6 +25,7 @@ use crate::window::{ensure_main_window, hide_on_close, show_window};
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_decorum::init())
         .manage(AppList::default())
         .manage(GameStates::default())
         .invoke_handler(tauri::generate_handler![
@@ -36,11 +37,19 @@ pub fn run() {
             get_metadata,
             remove_app,
             igdb_search,
-            apply_metadata
+            apply_metadata,
+            set_traffic_lights_inset
         ])
         .setup(|app| {
             *app.state::<AppList>().0.lock().unwrap() = load_apps(app.handle());
             let main_window = ensure_main_window(app.handle())?;
+            // Windows: decorum hides native decorations and injects overlay
+            // window controls (keeps Snap Layouts).
+            #[cfg(windows)]
+            {
+                use tauri_plugin_decorum::WebviewWindowExt;
+                main_window.create_overlay_titlebar()?;
+            }
             hide_on_close(&main_window);
 
             let show = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

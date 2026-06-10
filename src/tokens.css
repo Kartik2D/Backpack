@@ -37,10 +37,16 @@
   --bar-item-height: calc(13 * var(--vmin));
   --screen-top-inset: calc(18 * var(--vmin));
   --bubble-border: calc(0.35 * var(--vmin)) solid
-    color-mix(in srgb, var(--c-text) 7%, transparent);
+    color-mix(in srgb, var(--c-text) 12%, transparent);
 
   --menu-min-width: calc(40 * var(--vmin));
   --shelf-height: calc(60 * var(--vmin));
+
+  /* macOS overlay title bar: inset bar items past the traffic lights. Set
+     at runtime (px) by bp-app so the lights stay row-aligned at any scale. */
+  --traffic-light-inset: 0px;
+  /* Windows overlay title bar: inset bar items past the injected controls. */
+  --window-controls-inset: 0px;
 
   --outline-focus: calc(1 * var(--vmin)) solid #fff;
   --outline-offset: var(--space-1);
@@ -83,7 +89,7 @@
   --bubble-width: 22rem;
   --bar-item-height: 2.75rem;
   --screen-top-inset: 4.5rem;
-  --bubble-border: 1px solid color-mix(in srgb, var(--c-text) 7%, transparent);
+  --bubble-border: 1px solid color-mix(in srgb, var(--c-text) 12%, transparent);
 
   --menu-min-width: 16rem;
   --shelf-height: 18rem;
@@ -91,6 +97,11 @@
   --outline-focus: 2px solid #fff;
 
   --scrollbar-size: 0.375rem;
+}
+
+:root[data-platform="windows"] {
+  /* decorum injects three 46px-wide window control buttons top-right. */
+  --window-controls-inset: 140px;
 }
 
 *,

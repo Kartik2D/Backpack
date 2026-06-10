@@ -248,6 +248,25 @@ pub fn add_apps(paths: Vec<String>, app: tauri::AppHandle) -> Result<Vec<App>, S
     Ok(result)
 }
 
+/// Reposition the macOS traffic lights so the frontend can align them with
+/// its top bar (which scales with the UI). No-op on other platforms.
+#[tauri::command]
+#[allow(unused_variables)]
+pub fn set_traffic_lights_inset(
+    window: tauri::WebviewWindow,
+    x: f64,
+    y: f64,
+) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_plugin_decorum::WebviewWindowExt;
+        window
+            .set_traffic_lights_inset(x as f32, y as f32)
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub fn launch(path: String, window: tauri::WebviewWindow, app: tauri::AppHandle) {
     std::thread::spawn(move || {

@@ -12,6 +12,7 @@ import {
   onScanProgress,
   removeApp,
   scanGames,
+  setTrafficLightsInset,
   type GameApp,
   type GameStateEvent,
   type IgdbResult,
@@ -53,6 +54,29 @@ function storedScaleSettings(): ScaleSettings {
 const isFullscreenNow = () =>
   window.innerWidth === screen.width && window.innerHeight === screen.height;
 
+const isTauri = "__TAURI_INTERNALS__" in window;
+
+// Native macOS traffic light geometry (logical px): 14x16 button frames with
+// origins spaced 20px apart, so the cluster spans 54px.
+const TRAFFIC_LIGHT_HEIGHT = 16;
+const TRAFFIC_LIGHTS_WIDTH = 54;
+// decorum builds a titlebar of height (button height + y) with the buttons
+// vertically centered in it, then nudges them 4px down. The lights' visual
+// center therefore lands at y / 2 + 4 + height / 2 from the window top.
+const TRAFFIC_LIGHT_NUDGE = 4;
+
+/* Resolves layout tokens to px so native chrome can be aligned with the page. */
+function measureBarMetrics() {
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:absolute;visibility:hidden;width:var(--bubble-gap);height:var(--bar-item-height);padding-left:var(--space-3)";
+  document.body.append(probe);
+  const { width: gap, height: barItemHeight } = probe.getBoundingClientRect();
+  const bubblePadding = parseFloat(getComputedStyle(probe).paddingLeft);
+  probe.remove();
+  return { gap, barItemHeight, contentInset: gap + bubblePadding };
+}
+
 @customElement("bp-app")
 export class BpApp extends LitElement {
   @state() private apps: GameApp[] = [];
@@ -93,11 +117,22 @@ export class BpApp extends LitElement {
     if (fullscreen !== this.fullscreen) {
       this.fullscreen = fullscreen;
       this.applyScaling();
+    } else {
+      // vmin-based bar sizes change with the window, keep lights aligned.
+      this.syncWindowChrome();
     }
   };
 
   connectedCallback() {
     super.connectedCallback();
+    if (isTauri) {
+      const platform = navigator.platform.toLowerCase();
+      document.documentElement.dataset.platform = platform.includes("mac")
+        ? "macos"
+        : platform.includes("win")
+          ? "windows"
+          : "linux";
+    }
     this.applyScaling();
     window.addEventListener("resize", this.onResize);
     this.init();
@@ -119,6 +154,32 @@ export class BpApp extends LitElement {
       "--scale-factor",
       `${prefs.factor}`,
     );
+    this.syncWindowChrome();
+  }
+
+  /*
+   * macOS: keep the traffic lights on the same horizontal axis as the bar
+   * items (left-aligned with the bar padding, centered on the item row), and
+   * reserve bar space for them. In fullscreen macOS hides the lights, so the
+   * bar reclaims the full width.
+   */
+  private syncWindowChrome() {
+    if (document.documentElement.dataset.platform !== "macos") return;
+    const root = document.documentElement.style;
+    if (this.fullscreen) {
+      root.setProperty("--traffic-light-inset", "0px");
+      return;
+    }
+    const { gap, barItemHeight, contentInset } = measureBarMetrics();
+    root.setProperty(
+      "--traffic-light-inset",
+      `${Math.round(TRAFFIC_LIGHTS_WIDTH + contentInset)}px`,
+    );
+    // Invert decorum's placement formula so the lights' visual center matches
+    // the bar items' center (gap + barItemHeight / 2 from the window top).
+    const center = gap + barItemHeight / 2;
+    const y = 2 * (center - TRAFFIC_LIGHT_NUDGE - TRAFFIC_LIGHT_HEIGHT / 2);
+    void setTrafficLightsInset(contentInset, Math.max(0, y));
   }
 
   private updateScalePrefs(context: ScaleContext, patch: Partial<ScalePrefs>) {

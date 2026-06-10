@@ -44,6 +44,10 @@ export type ApplyMetadataInput = {
   description: string;
 };
 
+export async function setTrafficLightsInset(x: number, y: number): Promise<void> {
+  await invoke("set_traffic_lights_inset", { x, y });
+}
+
 export async function getApps(): Promise<GameApp[]> {
   return invoke<GameApp[]>("get_apps");
 }

@@ -1,3 +1,4 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { mountIcon, type BpIconName } from "./icons.js";
@@ -395,6 +396,29 @@ export class BpBubbleFlow extends LitElement {
  */
 @customElement("bp-screen")
 export class BpScreen extends LitElement {
+  private isInteractiveTarget(e: PointerEvent) {
+    for (const node of e.composedPath()) {
+      if (!(node instanceof Element)) continue;
+      if (node.matches("button, a, input, textarea, select, [role='button']")) {
+        return true;
+      }
+      const tag = node.tagName.toLowerCase();
+      if (tag.endsWith("-button") || tag === "bp-text-input") return true;
+    }
+    return false;
+  }
+
+  private onBarPointerDown(e: PointerEvent) {
+    if (
+      e.button !== 0 ||
+      this.isInteractiveTarget(e) ||
+      !("__TAURI_INTERNALS__" in window)
+    ) {
+      return;
+    }
+    void getCurrentWindow().startDragging();
+  }
+
   static styles = css`
     :host {
       display: block;
@@ -419,7 +443,7 @@ export class BpScreen extends LitElement {
       align-items: stretch;
       gap: var(--space-3);
       padding: var(--bubble-gap);
-      pointer-events: none;
+      cursor: default;
     }
     .bar::before {
       content: "";
@@ -440,14 +464,18 @@ export class BpScreen extends LitElement {
       min-width: 0;
       height: var(--bar-item-height);
     }
+    /* Native chrome safe areas only push the side pins, so the center title
+       stays centered to the window. */
     .left {
       justify-content: flex-start;
+      padding-left: var(--traffic-light-inset);
     }
     .center {
       justify-content: center;
     }
     .right {
       justify-content: flex-end;
+      padding-right: var(--window-controls-inset);
     }
   `;
 
@@ -456,7 +484,7 @@ export class BpScreen extends LitElement {
       <bp-scroll>
         <div class="body"><slot></slot></div>
       </bp-scroll>
-      <div class="bar">
+      <div class="bar" @pointerdown=${this.onBarPointerDown}>
         <div class="pin left"><slot name="top-left"></slot></div>
         <div class="pin center"><slot name="top-center"></slot></div>
         <div class="pin right"><slot name="top-right"></slot></div>

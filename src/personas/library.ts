@@ -19,13 +19,40 @@ export class BpLibraryView extends LitElement {
     :host {
       display: contents;
     }
-    .keyart {
+    .library-shelf {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 5;
+      padding: var(--bubble-gap);
+      pointer-events: none;
+    }
+    .library-shelf bp-bubble {
+      pointer-events: auto;
+      backdrop-filter: blur(24px);
+      background: color-mix(in srgb, var(--c-surface) 72%, transparent);
+    }
+    .game-art-bg {
       display: block;
       width: 100%;
-      aspect-ratio: 16 / 9;
+      height: min(52dvh, calc(var(--shelf-height) * 1.35));
+      margin-top: calc(-1 * var(--screen-top-inset));
+      overflow: hidden;
+      background: var(--c-bg);
+    }
+    .game-art-bg img {
+      display: block;
+      width: 100%;
+      height: 100%;
       object-fit: cover;
-      border-radius: var(--radius-lg);
-      background: var(--c-surface);
+    }
+    .game-content {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 5;
     }
     bp-side-scroll bp-context-menu {
       flex: 0 0 auto;
@@ -138,7 +165,11 @@ export class BpLibraryView extends LitElement {
                   No games yet.<br />Drag apps here, or scan from settings.
                 </p>
               </bp-bubble>`
-            : html`<bp-bubble span>
+            : nothing}
+        </bp-bubble-flow>
+        ${this.apps.length > 0
+          ? html`<div class="library-shelf">
+              <bp-bubble>
                 <bp-side-scroll height="var(--shelf-height)" gap="3">
                   ${this.apps.map(
                     (app) => html`<bp-context-menu>
@@ -175,8 +206,9 @@ export class BpLibraryView extends LitElement {
                     </bp-context-menu>`,
                   )}
                 </bp-side-scroll>
-              </bp-bubble>`}
-        </bp-bubble-flow>
+              </bp-bubble>
+            </div>`
+          : nothing}
       </bp-screen>
     `;
   }
@@ -186,18 +218,18 @@ export class BpLibraryView extends LitElement {
     const art = app.key_art || app.image;
     return html`
       <bp-screen>
+        ${art
+          ? html`<div class="game-art-bg">
+              <img src=${art} alt="" />
+            </div>`
+          : nothing}
         <bp-back-button
           slot="top-left"
           @click=${() => (this.selectedPath = null)}
         ></bp-back-button>
         <bp-title-bubble slot="top-center">${app.name}</bp-title-bubble>
 
-        <bp-bubble-flow>
-          ${art
-            ? html`<bp-bubble pad="0">
-                <img class="keyart" src=${art} alt="" />
-              </bp-bubble>`
-            : nothing}
+        <bp-bubble-flow class="game-content">
           <bp-bubble>
             <bp-stack gap="3">
               <bp-button

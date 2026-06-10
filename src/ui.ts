@@ -45,13 +45,20 @@ export class BpButton extends LitElement {
       align-items: center;
       justify-content: center;
       gap: var(--space-2);
+      min-width: 0;
       padding: var(--space-3) var(--space-4);
-      border-radius: var(--radius-md);
+      border-radius: var(--bp-button-radius, var(--radius-pill));
       background: var(--c-surface-2);
       color: var(--c-text);
       font-size: var(--font-md);
       font-weight: 600;
       line-height: 1.1;
+      white-space: nowrap;
+    }
+    .label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     button:hover:not(:disabled) {
       background: var(--c-surface-3);
@@ -85,6 +92,7 @@ export class BpButton extends LitElement {
       justify-content: flex-start;
       align-items: flex-start;
       text-align: left;
+      border-radius: var(--bp-button-radius, var(--radius-nested));
     }
     .content {
       display: flex;
@@ -98,6 +106,7 @@ export class BpButton extends LitElement {
       font-size: var(--font-sm);
       font-weight: 400;
       line-height: 1.35;
+      white-space: normal;
       color: var(--c-text-muted);
       display: -webkit-box;
       overflow: hidden;
@@ -130,7 +139,7 @@ export class BpButton extends LitElement {
             <span class="label"><slot></slot></span>
             <span class="subtitle">${this.subtitle}</span>
           </span>`
-        : html`<slot></slot>`}
+        : html`<span class="label"><slot></slot></span>`}
     </button>`;
   }
 }
@@ -157,7 +166,12 @@ export class BpIconButton extends LitElement {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      border-radius: var(--radius-md);
+      /* When the host is given a height (e.g. the top bar row), the button
+         squares off against it so the pill radius reads as a circle. */
+      height: 100%;
+      aspect-ratio: 1;
+      border-radius: var(--radius-pill);
+      border: var(--bubble-border);
       background: var(--c-surface-2);
       color: var(--c-text);
       line-height: 0;
@@ -174,6 +188,7 @@ export class BpIconButton extends LitElement {
       cursor: default;
     }
     .primary {
+      border-color: transparent;
       background: var(--c-accent-bg);
       color: #fff;
     }
@@ -239,6 +254,13 @@ export class BpXButton extends BpIconButton {
   override size: "sm" | "md" = "sm";
 }
 
+@customElement("bp-settings-button")
+export class BpSettingsButton extends BpIconButton {
+  override icon: BpIconName = "settings";
+  override label = "Settings";
+  override size: "sm" | "md" = "sm";
+}
+
 /* ------------------------------------------------------------------- Stack */
 
 @customElement("bp-stack")
@@ -291,19 +313,35 @@ export class BpRow extends LitElement {
   }
 }
 
-/* ----------------------------------------------------------------- Surface */
+/* ------------------------------------------------------------------ Bubble */
 
-@customElement("bp-surface")
-export class BpSurface extends LitElement {
+/*
+ * The generic container everything lives in. Bubbles have no intrinsic
+ * width: bp-bubble-flow sizes them through its grid cells. `span` makes a
+ * bubble take a full row of the flow (e.g. the cover shelf).
+ */
+@customElement("bp-bubble")
+export class BpBubble extends LitElement {
   @property({ type: Number }) pad = 3;
+  @property({ type: Boolean, reflect: true }) span = false;
 
   static styles = css`
     :host {
       display: block;
-      border-radius: var(--radius-md);
-      background: var(--c-surface-2);
+      box-sizing: border-box;
+      border-radius: var(--radius-lg);
+      border: var(--bubble-border);
+      background: var(--c-surface);
       min-width: 0;
       min-height: 0;
+    }
+    :host([span]) {
+      grid-column: 1 / -1;
+    }
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
     }
   `;
 
@@ -313,38 +351,347 @@ export class BpSurface extends LitElement {
   }
 }
 
-/* ------------------------------------------------------------------ Scroll */
+/* -------------------------------------------------------------- BubbleFlow */
 
-@customElement("bp-scroll")
-export class BpScroll extends LitElement {
+/*
+ * The bubble field. A responsive wrapping grid: column count follows the
+ * viewport aspect ratio because --bubble-width is in vmin (portrait gets one
+ * column, 16:9 two, ultrawide more).
+ */
+@customElement("bp-bubble-flow")
+export class BpBubbleFlow extends LitElement {
   static styles = css`
     :host {
-      display: block;
-      min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(
+        auto-fill,
+        minmax(min(var(--bubble-width), 100%), 1fr)
+      );
+      align-items: start;
+      gap: var(--bubble-gap);
+      padding: var(--bubble-gap);
       min-width: 0;
-      overflow: auto;
-      scrollbar-gutter: stable;
-      scrollbar-width: thin;
-      scrollbar-color: var(--c-text-dim) var(--c-surface);
-    }
-    :host::-webkit-scrollbar {
-      width: var(--scrollbar-size);
-      height: var(--scrollbar-size);
-    }
-    :host::-webkit-scrollbar-track {
-      background: var(--c-surface);
-    }
-    :host::-webkit-scrollbar-thumb {
-      background: var(--c-text-dim);
-      border-radius: var(--radius-pill);
-    }
-    :host::-webkit-scrollbar-thumb:hover {
-      background: var(--c-text);
     }
   `;
 
   render() {
     return html`<slot></slot>`;
+  }
+}
+
+/* ------------------------------------------------------------------ Screen */
+
+/*
+ * Full-viewport shell. The top bar is invisible: it has no surface of its
+ * own, just a gradient that fades out the content scrolling under it. Every
+ * item in the bar (slots top-left / top-center / top-right) is a bubble,
+ * stretched to one consistent row height.
+ */
+@customElement("bp-screen")
+export class BpScreen extends LitElement {
+  static styles = css`
+    :host {
+      display: block;
+      position: relative;
+      width: 100vw;
+      height: 100dvh;
+      overflow: hidden;
+    }
+    bp-scroll {
+      width: 100%;
+      height: 100%;
+    }
+    .body {
+      padding-top: var(--screen-top-inset, 18vmin);
+    }
+    .bar {
+      position: absolute;
+      inset: 0 0 auto 0;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: stretch;
+      gap: var(--space-3);
+      padding: var(--bubble-gap);
+      pointer-events: none;
+    }
+    .bar::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      background: linear-gradient(to bottom, var(--c-bg), transparent);
+    }
+    .pin {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+    /* Every bar item is a bubble at one consistent height. */
+    .pin ::slotted(*) {
+      pointer-events: auto;
+      min-width: 0;
+      height: var(--bar-item-height, 13vmin);
+    }
+    .left {
+      justify-content: flex-start;
+    }
+    .center {
+      justify-content: center;
+    }
+    .right {
+      justify-content: flex-end;
+    }
+  `;
+
+  render() {
+    return html`
+      <bp-scroll>
+        <div class="body"><slot></slot></div>
+      </bp-scroll>
+      <div class="bar">
+        <div class="pin left"><slot name="top-left"></slot></div>
+        <div class="pin center"><slot name="top-center"></slot></div>
+        <div class="pin right"><slot name="top-right"></slot></div>
+      </div>
+    `;
+  }
+}
+
+/* ------------------------------------------------------------- TitleBubble */
+
+@customElement("bp-title-bubble")
+export class BpTitleBubble extends LitElement {
+  static styles = css`
+    :host {
+      display: flex;
+      align-items: center;
+      box-sizing: border-box;
+      min-width: 0;
+      max-width: 100%;
+      padding: var(--space-2) var(--space-4);
+      border-radius: var(--radius-pill);
+      border: var(--bubble-border);
+      background: var(--c-surface);
+    }
+    h1 {
+      margin: 0;
+      min-width: 0;
+      font-size: var(--font-lg);
+      font-weight: 700;
+      line-height: 1.1;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+  `;
+
+  render() {
+    return html`<h1><slot></slot></h1>`;
+  }
+}
+
+/* --------------------------------------------------------------- Scrollbar */
+
+/*
+ * Overlay scrollbar. Renders on top of the content (absolute within the
+ * nearest positioned ancestor), takes no layout space, and fades in/out with
+ * opacity while the target scrolls. Display-only: native scrolling still
+ * drives it.
+ */
+@customElement("bp-scrollbar")
+export class BpScrollbar extends LitElement {
+  @property({ reflect: true }) axis: "vertical" | "horizontal" = "vertical";
+  @property({ attribute: false }) target: HTMLElement | null = null;
+
+  @state() private thumb = { size: 1, pos: 0 };
+
+  private hideTimer = 0;
+  private resizeObserver = new ResizeObserver(() => this.measure(false));
+  private onScroll = () => this.measure(true);
+
+  static styles = css`
+    :host {
+      position: absolute;
+      z-index: 100;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    :host([active]) {
+      opacity: 1;
+    }
+    :host([axis="vertical"]) {
+      top: var(--space-1);
+      bottom: var(--space-1);
+      right: var(--space-1);
+      width: var(--scrollbar-size);
+    }
+    :host([axis="horizontal"]) {
+      left: var(--space-1);
+      right: var(--space-1);
+      bottom: var(--space-1);
+      height: var(--scrollbar-size);
+    }
+    .thumb {
+      position: absolute;
+      border-radius: var(--radius-pill);
+      background: var(--c-text-dim);
+    }
+    :host([axis="vertical"]) .thumb {
+      left: 0;
+      right: 0;
+    }
+    :host([axis="horizontal"]) .thumb {
+      top: 0;
+      bottom: 0;
+    }
+  `;
+
+  protected updated(changed: PropertyValues) {
+    if (changed.has("target")) {
+      const prev = changed.get("target") as HTMLElement | null | undefined;
+      prev?.removeEventListener("scroll", this.onScroll);
+      this.resizeObserver.disconnect();
+      if (this.target) {
+        this.target.addEventListener("scroll", this.onScroll, {
+          passive: true,
+        });
+        this.resizeObserver.observe(this.target);
+        this.measure(false);
+      }
+    }
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    this.target?.removeEventListener("scroll", this.onScroll);
+    this.resizeObserver.disconnect();
+    clearTimeout(this.hideTimer);
+  }
+
+  private measure(reveal: boolean) {
+    const target = this.target;
+    if (!target) return;
+    const horizontal = this.axis === "horizontal";
+    const scrollSize = horizontal ? target.scrollWidth : target.scrollHeight;
+    const clientSize = horizontal ? target.clientWidth : target.clientHeight;
+    const scrollPos = horizontal ? target.scrollLeft : target.scrollTop;
+
+    if (scrollSize <= clientSize) {
+      this.removeAttribute("active");
+      return;
+    }
+
+    const size = Math.max(clientSize / scrollSize, 0.1);
+    const pos = (scrollPos / (scrollSize - clientSize)) * (1 - size);
+    this.thumb = { size, pos };
+
+    if (reveal) {
+      this.setAttribute("active", "");
+      clearTimeout(this.hideTimer);
+      this.hideTimer = window.setTimeout(
+        () => this.removeAttribute("active"),
+        900,
+      );
+    }
+  }
+
+  render() {
+    const horizontal = this.axis === "horizontal";
+    const start = horizontal ? "left" : "top";
+    const extent = horizontal ? "width" : "height";
+    return html`<div
+      class="thumb"
+      style="${start}:${this.thumb.pos * 100}%;${extent}:${this.thumb.size *
+      100}%"
+    ></div>`;
+  }
+}
+
+/* ------------------------------------------------------------------ Scroll */
+
+@customElement("bp-scroll")
+export class BpScroll extends LitElement {
+  @query(".viewport") private viewport?: HTMLElement;
+
+  static styles = css`
+    :host {
+      display: block;
+      position: relative;
+      min-height: 0;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .viewport {
+      width: 100%;
+      height: 100%;
+      overflow: auto;
+      scrollbar-width: none;
+    }
+    .viewport::-webkit-scrollbar {
+      display: none;
+    }
+  `;
+
+  protected firstUpdated() {
+    this.requestUpdate();
+  }
+
+  render() {
+    return html`<div class="viewport"><slot></slot></div>
+      <bp-scrollbar
+        axis="vertical"
+        .target=${this.viewport ?? null}
+      ></bp-scrollbar>`;
+  }
+}
+
+/* -------------------------------------------------------------- SideScroll */
+
+@customElement("bp-side-scroll")
+export class BpSideScroll extends LitElement {
+  @property({ type: Number }) gap = 2;
+  @property() height = "auto";
+
+  @query(".viewport") private viewport?: HTMLElement;
+
+  static styles = css`
+    :host {
+      display: block;
+      position: relative;
+      min-width: 0;
+    }
+    .viewport {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      width: 100%;
+      height: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scrollbar-width: none;
+    }
+    .viewport::-webkit-scrollbar {
+      display: none;
+    }
+  `;
+
+  protected firstUpdated() {
+    this.requestUpdate();
+  }
+
+  render() {
+    this.style.height = this.height;
+    return html`<div class="viewport" style="gap:${spaceVar(this.gap)}">
+        <slot></slot>
+      </div>
+      <bp-scrollbar
+        axis="horizontal"
+        .target=${this.viewport ?? null}
+      ></bp-scrollbar>`;
   }
 }
 
@@ -372,7 +719,7 @@ export class BpTextInput extends LitElement {
       min-width: 0;
       padding: var(--space-3) var(--space-4);
       border: 0;
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-pill);
       background: var(--c-surface-2);
       color: var(--c-text);
       font: inherit;
@@ -446,6 +793,9 @@ export class BpListItem extends LitElement {
       display: block;
       min-width: 0;
     }
+    bp-button {
+      --bp-button-radius: var(--radius-nested);
+    }
   `;
 
   render() {
@@ -463,13 +813,19 @@ export class BpListItem extends LitElement {
 
 /* -------------------------------------------------------------- RadioGroup */
 
-type RadioOption = { value: string; label: string };
+export type RadioOption = { value: string; label: string };
 
 @customElement("bp-radio-group")
 export class BpRadioGroup extends LitElement {
   @property({ attribute: false }) options: RadioOption[] = [];
   @property() value = "";
   @property({ type: Number }) gap = 2;
+
+  static styles = css`
+    bp-button {
+      --bp-button-radius: var(--radius-nested);
+    }
+  `;
 
   private select(value: string) {
     this.value = value;
@@ -510,12 +866,17 @@ export class BpContextMenu extends LitElement {
       display: block;
       min-width: 0;
     }
+    .trigger {
+      display: contents;
+    }
+    /* The menu popover is a floating bubble. */
     .menu {
       position: fixed;
       z-index: 2000;
       padding: var(--space-1);
       min-width: 40vmin;
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-lg);
+      border: var(--bubble-border);
       background: var(--c-surface);
     }
   `;
@@ -542,14 +903,13 @@ export class BpContextMenu extends LitElement {
 
   render() {
     return html`
-      <span @contextmenu=${this.onContextMenu}>
+      <span class="trigger" @contextmenu=${this.onContextMenu}>
         <slot name="trigger"></slot>
       </span>
       ${this.pos
         ? html`<div
             class="menu"
             style="left:${this.pos.x}px;top:${this.pos.y}px"
-            @click=${(e: Event) => e.stopPropagation()}
           >
             <slot></slot>
           </div>`
@@ -573,7 +933,7 @@ export class BpContextMenuItem extends LitElement {
       ${controlReset}
       width: 100%;
       padding: var(--space-3) var(--space-4);
-      border-radius: var(--radius-sm);
+      border-radius: var(--radius-pill);
       background: transparent;
       color: var(--c-text);
       font-size: var(--font-md);
@@ -620,9 +980,11 @@ export class BpToast extends LitElement {
     :host {
       display: block;
     }
+    /* The toast is a floating bubble. */
     .toast {
       padding: var(--space-3) var(--space-4);
-      border-radius: var(--radius-md);
+      border-radius: var(--radius-pill);
+      border: var(--bubble-border);
       background: var(--c-surface-2);
       font-size: var(--font-md);
       font-weight: 600;
@@ -635,173 +997,6 @@ export class BpToast extends LitElement {
   }
 }
 
-/* ------------------------------------------------- Example: Settings screen */
-
-@customElement("bp-settings-screen")
-export class BpSettingsScreen extends LitElement {
-  @state() private persona = "library";
-  @state() private search = "";
-  @state() private downloading = false;
-  @state() private toastMessage: string | null = null;
-
-  private personaOptions: RadioOption[] = [
-    { value: "library", label: "Library" },
-    { value: "list", label: "List" },
-    { value: "chaos", label: "Chaos" },
-    { value: "corkboard", label: "Corkboard" },
-  ];
-
-  static styles = css`
-    :host {
-      display: flex;
-      flex-direction: column;
-      width: 100vw;
-      height: 100dvh;
-      overflow: hidden;
-    }
-    header {
-      flex: 0 0 auto;
-      display: grid;
-      grid-template-columns: 1fr auto 1fr;
-      align-items: center;
-      gap: var(--space-3);
-      padding: var(--space-3) var(--space-4);
-    }
-    header bp-back-button {
-      justify-self: start;
-    }
-    bp-scroll {
-      flex: 1;
-      min-height: 0;
-    }
-    h1 {
-      margin: 0;
-      grid-column: 2;
-      font-size: var(--font-lg);
-      font-weight: 700;
-      text-align: center;
-    }
-    .body {
-      padding: var(--space-4);
-    }
-    .section-title {
-      margin: 0;
-      font-size: var(--font-sm);
-      font-weight: 650;
-      color: var(--c-text);
-    }
-    .toast-host {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: var(--space-3);
-      display: flex;
-      justify-content: center;
-      pointer-events: none;
-    }
-  `;
-
-  private showToast(message: string, autoHide = true) {
-    this.toastMessage = message;
-    if (autoHide) {
-      setTimeout(() => {
-        if (this.toastMessage === message) this.toastMessage = null;
-      }, 2500);
-    }
-  }
-
-  private downloadMetadata() {
-    if (this.downloading) return;
-    this.downloading = true;
-    this.showToast("Downloading metadata…", false);
-    setTimeout(() => {
-      this.downloading = false;
-      this.showToast("Metadata updated.");
-    }, 1600);
-  }
-
-  render() {
-    return html`
-      <header>
-        <bp-back-button></bp-back-button>
-        <h1>Settings</h1>
-      </header>
-
-      <bp-scroll>
-        <div class="body">
-          <bp-stack gap="4">
-            <bp-stack gap="2">
-              <h3 class="section-title">Persona</h3>
-              <bp-radio-group
-                .options=${this.personaOptions}
-                .value=${this.persona}
-                @change=${(e: CustomEvent<string>) =>
-                  (this.persona = e.detail)}
-              ></bp-radio-group>
-            </bp-stack>
-
-            <bp-stack gap="2">
-              <h3 class="section-title">Find metadata</h3>
-              <bp-row gap="3">
-                <bp-text-input
-                  style="flex:1 1 0;min-width:0"
-                  placeholder="Search a title…"
-                  .value=${this.search}
-                  @input=${(e: CustomEvent<string>) =>
-                    (this.search = e.detail)}
-                ></bp-text-input>
-                <bp-search-button
-                  style="flex:0 0 auto"
-                  ?disabled=${!this.search.trim()}
-                ></bp-search-button>
-              </bp-row>
-              <bp-list-item
-                subtitle="A metroidvania action-adventure set in the fallen kingdom of Hallownest."
-                >Hollow Knight</bp-list-item
-              >
-            </bp-stack>
-
-            <bp-stack gap="2">
-              <h3 class="section-title">Metadata</h3>
-              <bp-button
-                variant="primary"
-                full
-                align="start"
-                subtitle="Refresh cover art and descriptions for your whole library"
-                ?disabled=${this.downloading}
-                @click=${this.downloadMetadata}
-                >${this.downloading
-                  ? "Downloading…"
-                  : "Download metadata"}</bp-button
-              >
-            </bp-stack>
-
-            <bp-stack gap="2">
-              <h3 class="section-title">Library (right-click a row)</h3>
-              <bp-list gap="2">
-                ${["Hollow Knight", "Celeste", "Hades"].map(
-                  (name) => html`<bp-context-menu>
-                    <bp-list-item slot="trigger">${name}</bp-list-item>
-                    <bp-context-menu-item>Launch</bp-context-menu-item>
-                    <bp-context-menu-item>Find metadata</bp-context-menu-item>
-                    <bp-context-menu-item danger>Remove</bp-context-menu-item>
-                  </bp-context-menu>`,
-                )}
-              </bp-list>
-            </bp-stack>
-          </bp-stack>
-        </div>
-      </bp-scroll>
-
-      <div class="toast-host">
-        ${this.toastMessage
-          ? html`<bp-toast message=${this.toastMessage}></bp-toast>`
-          : nothing}
-      </div>
-    `;
-  }
-}
-
 declare global {
   interface HTMLElementTagNameMap {
     "bp-button": BpButton;
@@ -809,10 +1004,16 @@ declare global {
     "bp-back-button": BpBackButton;
     "bp-search-button": BpSearchButton;
     "bp-x-button": BpXButton;
+    "bp-settings-button": BpSettingsButton;
     "bp-stack": BpStack;
     "bp-row": BpRow;
-    "bp-surface": BpSurface;
+    "bp-bubble": BpBubble;
+    "bp-bubble-flow": BpBubbleFlow;
+    "bp-screen": BpScreen;
+    "bp-title-bubble": BpTitleBubble;
+    "bp-scrollbar": BpScrollbar;
     "bp-scroll": BpScroll;
+    "bp-side-scroll": BpSideScroll;
     "bp-text-input": BpTextInput;
     "bp-list": BpList;
     "bp-list-item": BpListItem;
@@ -820,6 +1021,5 @@ declare global {
     "bp-context-menu": BpContextMenu;
     "bp-context-menu-item": BpContextMenuItem;
     "bp-toast": BpToast;
-    "bp-settings-screen": BpSettingsScreen;
   }
 }

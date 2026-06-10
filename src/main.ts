@@ -1,2 +1,2 @@
 import "./tokens.css";
-import "./ui.js";
+import "./app.js";

@@ -1,10 +1,11 @@
-import { createElement, ArrowLeft, Search, X } from "lucide";
+import { createElement, ArrowLeft, Search, Settings, X } from "lucide";
 
-export type BpIconName = "back" | "search" | "x";
+export type BpIconName = "back" | "search" | "settings" | "x";
 
 const ICONS = {
   back: ArrowLeft,
   search: Search,
+  settings: Settings,
   x: X,
 } as const;
 

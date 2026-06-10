@@ -17,7 +17,22 @@
 
   --radius-sm: 1.5vmin;
   --radius-md: 2.5vmin;
+  --radius-lg: 4vmin;
   --radius-pill: 100vmax;
+  /* Controls nested inside a bubble use a fraction of the bubble's radius so
+     the corners read concentric instead of fully rounded. */
+  --radius-nested: calc(var(--radius-lg) * 0.6);
+
+  /*
+   * Bubbles are the unit of layout. --bubble-width is the minimum column
+   * width of the bubble flow: portrait gets 1 column, 16:9 gets 2, ultrawide
+   * gets more. Sized in vmin so it adapts to any aspect ratio.
+   */
+  --bubble-width: 80vmin;
+  --bubble-gap: var(--space-3);
+  --bar-item-height: 13vmin;
+  --bubble-border: 0.35vmin solid
+    color-mix(in srgb, var(--c-text) 7%, transparent);
 
   --outline-focus: 1vmin solid #fff;
   --outline-offset: var(--space-1);

@@ -4,20 +4,24 @@
  * handheld and scales cleanly up to a TV.
  */
 :root {
-  --space-1: 1vmin;
-  --space-2: 2vmin;
-  --space-3: 3vmin;
-  --space-4: 4.5vmin;
-  --space-5: 6vmin;
-  --space-6: 9vmin;
+  /* User-tunable multiplier on the vmin scale (settings > Scaling). */
+  --scale-factor: 1;
+  --vmin: calc(1vmin * var(--scale-factor));
 
-  --font-sm: 4.5vmin;
-  --font-md: 5.5vmin;
-  --font-lg: 7.5vmin;
+  --space-1: calc(1 * var(--vmin));
+  --space-2: calc(2 * var(--vmin));
+  --space-3: calc(3 * var(--vmin));
+  --space-4: calc(4.5 * var(--vmin));
+  --space-5: calc(6 * var(--vmin));
+  --space-6: calc(9 * var(--vmin));
 
-  --radius-sm: 1.5vmin;
-  --radius-md: 2.5vmin;
-  --radius-lg: 4vmin;
+  --font-sm: calc(4.5 * var(--vmin));
+  --font-md: calc(5.5 * var(--vmin));
+  --font-lg: calc(7.5 * var(--vmin));
+
+  --radius-sm: calc(1.5 * var(--vmin));
+  --radius-md: calc(2.5 * var(--vmin));
+  --radius-lg: calc(4 * var(--vmin));
   --radius-pill: 100vmax;
   /* Controls nested inside a bubble use a fraction of the bubble's radius so
      the corners read concentric instead of fully rounded. */
@@ -28,16 +32,20 @@
    * width of the bubble flow: portrait gets 1 column, 16:9 gets 2, ultrawide
    * gets more. Sized in vmin so it adapts to any aspect ratio.
    */
-  --bubble-width: 80vmin;
+  --bubble-width: calc(80 * var(--vmin));
   --bubble-gap: var(--space-3);
-  --bar-item-height: 13vmin;
-  --bubble-border: 0.35vmin solid
+  --bar-item-height: calc(13 * var(--vmin));
+  --screen-top-inset: calc(18 * var(--vmin));
+  --bubble-border: calc(0.35 * var(--vmin)) solid
     color-mix(in srgb, var(--c-text) 7%, transparent);
 
-  --outline-focus: 1vmin solid #fff;
+  --menu-min-width: calc(40 * var(--vmin));
+  --shelf-height: calc(60 * var(--vmin));
+
+  --outline-focus: calc(1 * var(--vmin)) solid #fff;
   --outline-offset: var(--space-1);
 
-  --scrollbar-size: 1.5vmin;
+  --scrollbar-size: calc(1.5 * var(--vmin));
 
   --c-bg: #161616;
   --c-surface: #1b1b1b;
@@ -50,6 +58,39 @@
   --c-accent-bg: #2d6cdf;
   --c-success: #52c46b;
   --c-danger: #e05b5b;
+}
+
+/*
+ * Fixed (rem) scaling: same token set anchored on --font-md = 1rem instead of
+ * the screen-relative vmin scale. Toggled from settings via html[data-scale].
+ */
+:root[data-scale="rem"] {
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1.125rem;
+  --space-5: 1.5rem;
+  --space-6: 2.25rem;
+
+  --font-sm: 0.875rem;
+  --font-md: 1rem;
+  --font-lg: 1.375rem;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 1rem;
+
+  --bubble-width: 22rem;
+  --bar-item-height: 2.75rem;
+  --screen-top-inset: 4.5rem;
+  --bubble-border: 1px solid color-mix(in srgb, var(--c-text) 7%, transparent);
+
+  --menu-min-width: 16rem;
+  --shelf-height: 18rem;
+
+  --outline-focus: 2px solid #fff;
+
+  --scrollbar-size: 0.375rem;
 }
 
 *,

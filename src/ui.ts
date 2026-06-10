@@ -17,6 +17,7 @@ const controlReset = css`
 export class BpButton extends LitElement {
   @property() variant: "default" | "primary" = "default";
   @property() size: "sm" | "md" = "md";
+  @property({ type: Boolean, reflect: true }) compact = false;
   @property() align: "center" | "start" = "center";
   @property({ type: Boolean }) full = false;
   @property({ type: Boolean }) disabled = false;
@@ -88,6 +89,10 @@ export class BpButton extends LitElement {
       padding: var(--space-2) var(--space-3);
       font-size: var(--font-sm);
     }
+    .compact {
+      font-size: var(--font-sm);
+      font-weight: 400;
+    }
     .has-subtitle {
       justify-content: flex-start;
       align-items: flex-start;
@@ -123,6 +128,7 @@ export class BpButton extends LitElement {
     const cls = [
       this.variant === "primary" ? "primary" : "",
       this.size === "sm" ? "sm" : "",
+      this.compact ? "compact" : "",
       this.align === "start" ? "start" : "",
       this.selected ? "selected" : "",
       this.subtitle ? "has-subtitle" : "",
@@ -402,7 +408,7 @@ export class BpScreen extends LitElement {
       height: 100%;
     }
     .body {
-      padding-top: var(--screen-top-inset, 18vmin);
+      padding-top: var(--screen-top-inset);
     }
     .bar {
       position: absolute;
@@ -432,7 +438,7 @@ export class BpScreen extends LitElement {
     .pin ::slotted(*) {
       pointer-events: auto;
       min-width: 0;
-      height: var(--bar-item-height, 13vmin);
+      height: var(--bar-item-height);
     }
     .left {
       justify-content: flex-start;
@@ -853,6 +859,84 @@ export class BpRadioGroup extends LitElement {
   }
 }
 
+/* ----------------------------------------------------------------- TabView */
+
+export type TabOption = { value: string; label: string };
+
+/*
+ * Generic tab view. The tab bar is a glass pill (same floating-bubble
+ * treatment as the title bubble: surface, highlight border, pill radius)
+ * holding one segment per tab. Panels are named slots keyed by tab value;
+ * only the active tab's slot is rendered.
+ *
+ *   <bp-tab-view .tabs=${[{ value: "a", label: "A" }]} value="a">
+ *     <div slot="a">…</div>
+ *   </bp-tab-view>
+ */
+@customElement("bp-tab-view")
+export class BpTabView extends LitElement {
+  @property({ attribute: false }) tabs: TabOption[] = [];
+  @property() value = "";
+
+  static styles = css`
+    :host {
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+    .bar {
+      display: flex;
+      gap: var(--space-1);
+      padding: var(--space-1);
+      border-radius: var(--radius-pill);
+      border: var(--bubble-border);
+      background: var(--c-surface);
+    }
+    .bar bp-button {
+      flex: 1;
+    }
+    .panel {
+      min-width: 0;
+      min-height: 0;
+    }
+  `;
+
+  private get active(): string {
+    return this.value || this.tabs[0]?.value || "";
+  }
+
+  private select(value: string) {
+    if (value === this.value) return;
+    this.value = value;
+    this.dispatchEvent(
+      new CustomEvent("change", {
+        detail: value,
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  }
+
+  render() {
+    return html`
+      <div class="bar" role="tablist">
+        ${this.tabs.map(
+          (tab) => html`<bp-button
+            size="sm"
+            role="tab"
+            aria-selected=${this.active === tab.value}
+            ?selected=${this.active === tab.value}
+            @click=${() => this.select(tab.value)}
+            >${tab.label}</bp-button
+          >`,
+        )}
+      </div>
+      <div class="panel"><slot name=${this.active}></slot></div>
+    `;
+  }
+}
+
 /* ------------------------------------------------------------- ContextMenu */
 
 @customElement("bp-context-menu")
@@ -874,7 +958,7 @@ export class BpContextMenu extends LitElement {
       position: fixed;
       z-index: 2000;
       padding: var(--space-1);
-      min-width: 40vmin;
+      min-width: var(--menu-min-width);
       border-radius: var(--radius-lg);
       border: var(--bubble-border);
       background: var(--c-surface);
@@ -1018,6 +1102,7 @@ declare global {
     "bp-list": BpList;
     "bp-list-item": BpListItem;
     "bp-radio-group": BpRadioGroup;
+    "bp-tab-view": BpTabView;
     "bp-context-menu": BpContextMenu;
     "bp-context-menu-item": BpContextMenuItem;
     "bp-toast": BpToast;

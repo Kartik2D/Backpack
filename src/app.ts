@@ -26,11 +26,40 @@ type Screen =
   | { id: "settings" }
   | { id: "metadata"; game: GameApp };
 
+export type ScaleMode = "vmin" | "rem";
+export type ScaleContext = "desktop" | "fullscreen";
+export type ScalePrefs = { mode: ScaleMode; factor: number };
+export type ScaleSettings = Record<ScaleContext, ScalePrefs>;
+
+const SCALE_STORAGE_KEY = "backpack.scalePrefs";
+
+const DEFAULT_SCALE_SETTINGS: ScaleSettings = {
+  desktop: { mode: "rem", factor: 1 },
+  fullscreen: { mode: "vmin", factor: 1 },
+};
+
+function storedScaleSettings(): ScaleSettings {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SCALE_STORAGE_KEY) ?? "");
+    return {
+      desktop: { ...DEFAULT_SCALE_SETTINGS.desktop, ...raw?.desktop },
+      fullscreen: { ...DEFAULT_SCALE_SETTINGS.fullscreen, ...raw?.fullscreen },
+    };
+  } catch {
+    return structuredClone(DEFAULT_SCALE_SETTINGS);
+  }
+}
+
+const isFullscreenNow = () =>
+  window.innerWidth === screen.width && window.innerHeight === screen.height;
+
 @customElement("bp-app")
 export class BpApp extends LitElement {
   @state() private apps: GameApp[] = [];
   @state() private gameStates: Record<string, string> = {};
   @state() private personaId = defaultPersonaId;
+  @state() private scaleSettings = storedScaleSettings();
+  @state() private fullscreen = isFullscreenNow();
   @state() private screen: Screen = { id: "library" };
   @state() private working = false;
   @state() private applying = false;
@@ -59,13 +88,51 @@ export class BpApp extends LitElement {
     }
   `;
 
+  private onResize = () => {
+    const fullscreen = isFullscreenNow();
+    if (fullscreen !== this.fullscreen) {
+      this.fullscreen = fullscreen;
+      this.applyScaling();
+    }
+  };
+
   connectedCallback() {
     super.connectedCallback();
+    this.applyScaling();
+    window.addEventListener("resize", this.onResize);
     this.init();
+  }
+
+  private get scaleContext(): ScaleContext {
+    return this.fullscreen ? "fullscreen" : "desktop";
+  }
+
+  /* Applies whichever scaling prefs match the current window state. */
+  private applyScaling() {
+    const prefs = this.scaleSettings[this.scaleContext];
+    if (prefs.mode === "rem") {
+      document.documentElement.dataset.scale = "rem";
+    } else {
+      delete document.documentElement.dataset.scale;
+    }
+    document.documentElement.style.setProperty(
+      "--scale-factor",
+      `${prefs.factor}`,
+    );
+  }
+
+  private updateScalePrefs(context: ScaleContext, patch: Partial<ScalePrefs>) {
+    this.scaleSettings = {
+      ...this.scaleSettings,
+      [context]: { ...this.scaleSettings[context], ...patch },
+    };
+    localStorage.setItem(SCALE_STORAGE_KEY, JSON.stringify(this.scaleSettings));
+    this.applyScaling();
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
+    window.removeEventListener("resize", this.onResize);
     for (const unlisten of this.unlisteners) unlisten();
     this.unlisteners = [];
   }
@@ -221,6 +288,8 @@ export class BpApp extends LitElement {
       case "settings":
         return html`<bp-settings-screen
           .personaId=${this.personaId}
+          .scaleSettings=${this.scaleSettings}
+          .scaleContext=${this.scaleContext}
           ?working=${this.working}
         ></bp-settings-screen>`;
       case "metadata":
@@ -244,6 +313,13 @@ export class BpApp extends LitElement {
         @back=${() => (this.screen = { id: "library" })}
         @persona-change=${(e: CustomEvent<string>) =>
           (this.personaId = e.detail)}
+        @scale-change=${(
+          e: CustomEvent<{ context: ScaleContext; mode: ScaleMode }>,
+        ) => this.updateScalePrefs(e.detail.context, { mode: e.detail.mode })}
+        @scale-factor-change=${(
+          e: CustomEvent<{ context: ScaleContext; factor: number }>,
+        ) =>
+          this.updateScalePrefs(e.detail.context, { factor: e.detail.factor })}
         @launch-game=${(e: CustomEvent<GameApp>) => this.launchGame(e.detail)}
         @remove-game=${(e: CustomEvent<GameApp>) => this.removeGame(e.detail)}
         @find-metadata=${(e: CustomEvent<GameApp>) =>

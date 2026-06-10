@@ -139,7 +139,7 @@ export class BpLibraryView extends LitElement {
                 </p>
               </bp-bubble>`
             : html`<bp-bubble span>
-                <bp-side-scroll height="60vmin" gap="3">
+                <bp-side-scroll height="var(--shelf-height)" gap="3">
                   ${this.apps.map(
                     (app) => html`<bp-context-menu>
                       <button

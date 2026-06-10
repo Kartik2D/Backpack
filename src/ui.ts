@@ -1,7 +1,6 @@
 import { LitElement, html, css, nothing, type PropertyValues } from "lit";
 import { customElement, property, query, state } from "lit/decorators.js";
 import { mountIcon, type BpIconName } from "./icons.js";
-
 const spaceVar = (n: number) => (n ? `var(--space-${n})` : "0");
 
 const controlReset = css`
@@ -22,6 +21,7 @@ export class BpButton extends LitElement {
   @property({ type: Boolean }) full = false;
   @property({ type: Boolean }) disabled = false;
   @property({ type: Boolean, reflect: true }) selected = false;
+  @property() subtitle = "";
   @property() type: "button" | "submit" | "reset" = "button";
 
   static styles = css`
@@ -81,6 +81,33 @@ export class BpButton extends LitElement {
       padding: var(--space-2) var(--space-3);
       font-size: var(--font-sm);
     }
+    .has-subtitle {
+      justify-content: flex-start;
+      align-items: flex-start;
+      text-align: left;
+    }
+    .content {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: var(--space-1);
+      min-width: 0;
+      text-align: left;
+    }
+    .subtitle {
+      font-size: var(--font-sm);
+      font-weight: 400;
+      line-height: 1.35;
+      color: var(--c-text-muted);
+      display: -webkit-box;
+      overflow: hidden;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    .primary .subtitle,
+    .selected .subtitle {
+      color: color-mix(in srgb, #fff 72%, transparent);
+    }
   `;
 
   render() {
@@ -89,6 +116,7 @@ export class BpButton extends LitElement {
       this.size === "sm" ? "sm" : "",
       this.align === "start" ? "start" : "",
       this.selected ? "selected" : "",
+      this.subtitle ? "has-subtitle" : "",
     ]
       .filter(Boolean)
       .join(" ");
@@ -97,7 +125,12 @@ export class BpButton extends LitElement {
       type=${this.type}
       ?disabled=${this.disabled}
     >
-      <slot></slot>
+      ${this.subtitle
+        ? html`<span class="content">
+            <span class="label"><slot></slot></span>
+            <span class="subtitle">${this.subtitle}</span>
+          </span>`
+        : html`<slot></slot>`}
     </button>`;
   }
 }
@@ -406,6 +439,7 @@ export class BpList extends LitElement {
 export class BpListItem extends LitElement {
   @property({ type: Boolean, reflect: true }) selected = false;
   @property({ type: Boolean }) disabled = false;
+  @property() subtitle = "";
 
   static styles = css`
     :host {
@@ -418,6 +452,7 @@ export class BpListItem extends LitElement {
     return html`<bp-button
       full
       align="start"
+      .subtitle=${this.subtitle}
       ?selected=${this.selected}
       ?disabled=${this.disabled}
     >
@@ -720,6 +755,10 @@ export class BpSettingsScreen extends LitElement {
                   ?disabled=${!this.search.trim()}
                 ></bp-search-button>
               </bp-row>
+              <bp-list-item
+                subtitle="A metroidvania action-adventure set in the fallen kingdom of Hallownest."
+                >Hollow Knight</bp-list-item
+              >
             </bp-stack>
 
             <bp-stack gap="2">
@@ -727,6 +766,8 @@ export class BpSettingsScreen extends LitElement {
               <bp-button
                 variant="primary"
                 full
+                align="start"
+                subtitle="Refresh cover art and descriptions for your whole library"
                 ?disabled=${this.downloading}
                 @click=${this.downloadMetadata}
                 >${this.downloading
